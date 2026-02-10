@@ -1,0 +1,24 @@
+# Build outputs
+/build/
+/cmake-build-*/
+
+# CMake generated files
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/compile_commands.json
+/Makefile
+/Testing/
+/CTestTestfile.cmake
+
+# macOS
+.DS_Store
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
