@@ -1,8 +1,11 @@
 #include "SceneSystem.h"
 
+#include <raygui.h>
 #include <raylib.h>
 #include <raymath.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 
@@ -25,12 +28,20 @@ Vector3 SpawnPositionFromCamera(const Camera3D &camera)
     spawn.y = std::max(spawn.y, 1.2f);
     return spawn;
 }
+
+enum class AddShapeType : int
+{
+    Box = 0,
+    Sphere = 1,
+    Capsule = 2,
+    Cylinder = 3,
+};
 } // namespace
 
 int main()
 {
     SetConfigFlags(FLAG_MSAA_4X_HINT);
-    InitWindow(1440, 900, "Raylib + Jolt Scene System");
+    InitWindow(1600, 960, "Raylib + Jolt Scene System");
     SetTargetFPS(120);
 
     Camera3D camera{};
@@ -49,13 +60,37 @@ int main()
     int hovered_object_id = 0;
     int selected_object_id = 0;
 
+    bool show_ui = true;
+    bool show_help = true;
+    bool show_physics_debug = true;
+
+    int add_shape_index = 0;
+    float add_size_x = 0.5f;
+    float add_size_y = 0.5f;
+    float add_size_z = 0.5f;
+    float add_radius = 0.35f;
+    float add_half_height = 0.50f;
+
     while (!WindowShouldClose())
     {
         const float dt = GetFrameTime();
+        const Vector2 mouse = GetMousePosition();
+
+        if (IsKeyPressed(KEY_F1))
+        {
+            show_ui = !show_ui;
+        }
+        if (IsKeyPressed(KEY_F2))
+        {
+            show_physics_debug = !show_physics_debug;
+        }
+        if (IsKeyPressed(KEY_F3))
+        {
+            show_help = !show_help;
+        }
 
         UpdateCamera(&camera, CAMERA_FREE);
 
-        const Vector2 mouse = GetMousePosition();
         const auto hovered = scene.PickObject(camera, mouse, false);
         hovered_object_id = hovered.has_value() ? *hovered : 0;
 
@@ -83,76 +118,159 @@ int main()
             }
         }
 
+        if (IsKeyPressed(KEY_DELETE) || IsKeyPressed(KEY_BACKSPACE))
+        {
+            if (selected_object_id != 0 && scene.RemoveObject(selected_object_id))
+            {
+                selected_object_id = 0;
+            }
+        }
+
+        if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && hovered_object_id != 0)
+        {
+            if (scene.RemoveObject(hovered_object_id) && hovered_object_id == selected_object_id)
+            {
+                selected_object_id = 0;
+            }
+        }
+
         if (IsKeyPressed(KEY_ONE))
         {
             const Vector3 spawn = SpawnPositionFromCamera(camera);
-            scene.AddBox(spawn,
-                         Vector3{0.5f, 0.5f, 0.5f},
-                         true,
-                         Color{0, 0, 0, 0});
+            scene.AddBox(spawn, Vector3{0.5f, 0.5f, 0.5f}, true, Color{0, 0, 0, 0});
         }
-
         if (IsKeyPressed(KEY_TWO))
         {
             const Vector3 spawn = SpawnPositionFromCamera(camera);
             scene.AddSphere(spawn, 0.45f, true, Color{0, 0, 0, 0});
         }
-
-        if (IsKeyPressed(KEY_DELETE) || IsKeyPressed(KEY_BACKSPACE))
+        if (IsKeyPressed(KEY_THREE))
         {
-            if (selected_object_id != 0)
-            {
-                const bool removed = scene.RemoveObject(selected_object_id);
-                if (removed)
-                {
-                    selected_object_id = 0;
-                }
-            }
+            const Vector3 spawn = SpawnPositionFromCamera(camera);
+            scene.AddCapsule(spawn, 0.50f, 0.30f, Color{0, 0, 0, 0});
         }
-
-        if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))
+        if (IsKeyPressed(KEY_FOUR))
         {
-            if (hovered_object_id != 0)
-            {
-                if (scene.RemoveObject(hovered_object_id) &&
-                    hovered_object_id == selected_object_id)
-                {
-                    selected_object_id = 0;
-                }
-            }
+            const Vector3 spawn = SpawnPositionFromCamera(camera);
+            scene.AddCylinder(spawn, 0.50f, 0.35f, Color{0, 0, 0, 0});
         }
 
         scene.Step(dt);
 
         BeginDrawing();
-        ClearBackground(Color{235, 238, 245, 255});
+        ClearBackground(Color{236, 239, 246, 255});
 
         BeginMode3D(camera);
-        DrawGrid(50, 1.0f);
+        DrawGrid(60, 1.0f);
 
         const int highlighted_id =
             scene.IsDragging() ? scene.DraggingObjectId() : hovered_object_id;
         scene.Draw(highlighted_id != 0 ? highlighted_id : selected_object_id);
 
+        if (show_physics_debug)
+        {
+            scene.DrawPhysicsDebug(true);
+        }
+
         EndMode3D();
 
-        DrawRectangle(14, 14, 590, 144, Fade(RAYWHITE, 0.88f));
-        DrawRectangleLines(14, 14, 590, 144, Fade(DARKGRAY, 0.7f));
-
-        DrawText("Raylib + Jolt Scene System", 28, 28, 26, BLACK);
-        DrawText("WASD + Mouse: 移动相机 (raylib free camera)", 28, 62, 20, DARKGRAY);
-        DrawText("1: 增加 Box    2: 增加 Sphere", 28, 86, 20, DARKGRAY);
-        DrawText("左键拖拽物体  右键删除悬停物体  Del/Backspace 删除选中", 28, 110, 20, DARKGRAY);
-
-        const std::string object_count_text = "Objects: " +
-                                              std::to_string(scene.Objects().size());
-        DrawText(object_count_text.c_str(), 28, 132, 18, GRAY);
-
-        if (selected_object_id != 0)
+        if (show_ui)
         {
-            const std::string selected_text = "Selected ID: " +
-                                              std::to_string(selected_object_id);
-            DrawText(selected_text.c_str(), 460, 132, 18, MAROON);
+            const Rectangle panel = Rectangle{16, 16, 380, 420};
+            GuiPanel(panel, "Scene Controls");
+
+            float y = panel.y + 36;
+            const float x = panel.x + 16;
+
+            GuiLabel(Rectangle{x, y, 150, 22}, "Spawn Shape");
+            y += 26;
+
+            GuiToggleGroup(Rectangle{x, y, 350, 28},
+                           "Box;Sphere;Capsule;Cylinder",
+                           &add_shape_index);
+            y += 44;
+
+            GuiLabel(Rectangle{x, y, 140, 22}, "Box Half Extents");
+            y += 24;
+            GuiSliderBar(Rectangle{x, y, 350, 20}, "X", TextFormat("%.2f", add_size_x), &add_size_x, 0.10f, 2.00f);
+            y += 26;
+            GuiSliderBar(Rectangle{x, y, 350, 20}, "Y", TextFormat("%.2f", add_size_y), &add_size_y, 0.10f, 2.00f);
+            y += 26;
+            GuiSliderBar(Rectangle{x, y, 350, 20}, "Z", TextFormat("%.2f", add_size_z), &add_size_z, 0.10f, 2.00f);
+            y += 34;
+
+            GuiLabel(Rectangle{x, y, 140, 22}, "Round Shapes");
+            y += 24;
+            GuiSliderBar(Rectangle{x, y, 350, 20}, "Radius", TextFormat("%.2f", add_radius), &add_radius, 0.05f, 1.50f);
+            y += 26;
+            GuiSliderBar(Rectangle{x, y, 350, 20}, "Half Height", TextFormat("%.2f", add_half_height), &add_half_height, 0.05f, 1.50f);
+            y += 40;
+
+            if (GuiButton(Rectangle{x, y, 170, 30}, "Add At Camera"))
+            {
+                const Vector3 spawn = SpawnPositionFromCamera(camera);
+                const AddShapeType shape = static_cast<AddShapeType>(add_shape_index);
+
+                switch (shape)
+                {
+                case AddShapeType::Box:
+                    scene.AddBox(spawn,
+                                 Vector3{add_size_x, add_size_y, add_size_z},
+                                 true,
+                                 Color{0, 0, 0, 0});
+                    break;
+                case AddShapeType::Sphere:
+                    scene.AddSphere(spawn, add_radius, true, Color{0, 0, 0, 0});
+                    break;
+                case AddShapeType::Capsule:
+                    scene.AddCapsule(spawn, add_half_height, add_radius, Color{0, 0, 0, 0});
+                    break;
+                case AddShapeType::Cylinder:
+                    scene.AddCylinder(spawn, add_half_height, add_radius, Color{0, 0, 0, 0});
+                    break;
+                }
+            }
+
+            if (GuiButton(Rectangle{x + 180, y, 170, 30}, "Delete Selected"))
+            {
+                if (selected_object_id != 0 && scene.RemoveObject(selected_object_id))
+                {
+                    selected_object_id = 0;
+                }
+            }
+            y += 44;
+
+            GuiCheckBox(Rectangle{x, y, 20, 20}, "Show Physics Debug", &show_physics_debug);
+            y += 26;
+            GuiCheckBox(Rectangle{x, y, 20, 20}, "Show Help Overlay", &show_help);
+            y += 30;
+
+            GuiLabel(Rectangle{x, y, 350, 22}, TextFormat("Object Count: %i", static_cast<int>(scene.Objects().size())));
+            y += 22;
+            GuiLabel(Rectangle{x, y, 350, 22}, TextFormat("Hovered ID: %i", hovered_object_id));
+            y += 22;
+            GuiLabel(Rectangle{x, y, 350, 22}, TextFormat("Selected ID: %i", selected_object_id));
+            y += 22;
+            GuiLabel(Rectangle{x, y, 350, 22}, TextFormat("Dragging: %s", scene.IsDragging() ? "Yes" : "No"));
+        }
+
+        if (show_help)
+        {
+            DrawRectangle(420, 16, 520, 106, Fade(RAYWHITE, 0.92f));
+            DrawRectangleLines(420, 16, 520, 106, Fade(DARKGRAY, 0.60f));
+
+            DrawText("Controls", 434, 28, 22, BLACK);
+            DrawText("WASD + Mouse: move camera (free mode)", 434, 56, 19, DARKGRAY);
+            DrawText("Left drag: move dynamic body | Right click: delete hovered",
+                     434,
+                     80,
+                     19,
+                     DARKGRAY);
+            DrawText("1/2/3/4: spawn Box/Sphere/Capsule/Cylinder | F1 UI | F2 Physics Debug | F3 Help",
+                     434,
+                     102,
+                     17,
+                     DARKGRAY);
         }
 
         EndDrawing();

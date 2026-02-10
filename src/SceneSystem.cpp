@@ -4,27 +4,101 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 namespace
 {
-Vector3 QuaternionAxis(const Quaternion &rotation)
+Matrix MatrixFromTransform(const Vector3 &position,
+                           const Quaternion &rotation,
+                           const Vector3 &scale)
 {
-    Quaternion normalized = QuaternionNormalize(rotation);
-    Vector3 axis{normalized.x, normalized.y, normalized.z};
-    const float length = Vector3Length(axis);
-    if (length < 0.0001f)
-    {
-        return Vector3{0.0f, 1.0f, 0.0f};
-    }
-    return Vector3Scale(axis, 1.0f / length);
+    const Matrix translation = MatrixTranslate(position.x, position.y, position.z);
+    const Matrix rotation_m = QuaternionToMatrix(QuaternionNormalize(rotation));
+    const Matrix scaling = MatrixScale(scale.x, scale.y, scale.z);
+    return MatrixMultiply(MatrixMultiply(scaling, rotation_m), translation);
 }
 
-float QuaternionAngle(const Quaternion &rotation)
+void DrawOrientedBox(const Vector3 &position,
+                     const Quaternion &rotation,
+                     const Vector3 &half_extents,
+                     Color fill,
+                     Color wire)
 {
-    Quaternion normalized = QuaternionNormalize(rotation);
-    const float clamped_w = std::max(-1.0f, std::min(1.0f, normalized.w));
-    return 2.0f * std::acos(clamped_w);
+    const Mesh cube = GenMeshCube(1.0f, 1.0f, 1.0f);
+    Material default_material = LoadMaterialDefault();
+    default_material.maps[MATERIAL_MAP_DIFFUSE].color = fill;
+
+    const Matrix transform =
+        MatrixFromTransform(position, rotation, Vector3Scale(half_extents, 2.0f));
+    DrawMesh(cube, default_material, transform);
+
+    const Vector3 corners[8] = {
+        Vector3{-half_extents.x, -half_extents.y, -half_extents.z},
+        Vector3{half_extents.x, -half_extents.y, -half_extents.z},
+        Vector3{half_extents.x, half_extents.y, -half_extents.z},
+        Vector3{-half_extents.x, half_extents.y, -half_extents.z},
+        Vector3{-half_extents.x, -half_extents.y, half_extents.z},
+        Vector3{half_extents.x, -half_extents.y, half_extents.z},
+        Vector3{half_extents.x, half_extents.y, half_extents.z},
+        Vector3{-half_extents.x, half_extents.y, half_extents.z}};
+
+    Vector3 world[8]{};
+    for (int i = 0; i < 8; ++i)
+    {
+        const Vector3 rotated = Vector3RotateByQuaternion(corners[i], rotation);
+        world[i] = Vector3Add(position, rotated);
+    }
+
+    const int edges[12][2] = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 0},
+        {4, 5}, {5, 6}, {6, 7}, {7, 4},
+        {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+    for (const auto &edge : edges)
+    {
+        DrawLine3D(world[edge[0]], world[edge[1]], wire);
+    }
+
+    UnloadMesh(cube);
+    UnloadMaterial(default_material);
+}
+
+void DrawOrientedSphere(const Vector3 &position, float radius, Color fill, Color wire)
+{
+    DrawSphere(position, radius, fill);
+    DrawSphereWires(position, radius, 14, 14, wire);
+}
+
+void DrawOrientedCapsule(const Vector3 &position,
+                        const Quaternion &rotation,
+                        float half_height,
+                        float radius,
+                        Color fill,
+                        Color wire)
+{
+    const Vector3 local_bottom{0.0f, -half_height, 0.0f};
+    const Vector3 local_top{0.0f, half_height, 0.0f};
+    const Vector3 bottom =
+        Vector3Add(position, Vector3RotateByQuaternion(local_bottom, rotation));
+    const Vector3 top = Vector3Add(position, Vector3RotateByQuaternion(local_top, rotation));
+
+    DrawCapsule(bottom, top, radius, 10, 12, fill);
+    DrawCapsuleWires(bottom, top, radius, 10, 12, wire);
+}
+
+void DrawOrientedCylinder(const Vector3 &position,
+                         const Quaternion &rotation,
+                         float half_height,
+                         float radius,
+                         Color fill,
+                         Color wire)
+{
+    const Vector3 local_bottom{0.0f, -half_height, 0.0f};
+    const Vector3 local_top{0.0f, half_height, 0.0f};
+    const Vector3 bottom =
+        Vector3Add(position, Vector3RotateByQuaternion(local_bottom, rotation));
+    const Vector3 top = Vector3Add(position, Vector3RotateByQuaternion(local_top, rotation));
+
+    DrawCylinderEx(bottom, top, radius, radius, 16, fill);
+    DrawCylinderWiresEx(bottom, top, radius, radius, 16, wire);
 }
 } // namespace
 
@@ -47,12 +121,9 @@ void SceneSystem::InitializeDefaultScene()
            Vector3{0.6f, 0.6f, 0.6f},
            true,
            Color{80, 180, 255, 255});
-
     AddSphere(Vector3{2.5f, 3.0f, 0.0f}, 0.5f, true, Color{255, 150, 70, 255});
-    AddBox(Vector3{-2.0f, 4.5f, -1.2f},
-           Vector3{0.45f, 0.45f, 0.45f},
-           true,
-           Color{140, 255, 170, 255});
+    AddCapsule(Vector3{-1.8f, 3.4f, 0.8f}, 0.5f, 0.28f, Color{130, 230, 170, 255});
+    AddCylinder(Vector3{1.4f, 4.0f, -1.0f}, 0.55f, 0.30f, Color{200, 170, 255, 255});
 }
 
 void SceneSystem::Step(float delta_time)
@@ -73,38 +144,34 @@ void SceneSystem::Draw(int highlighted_object_id) const
         const Quaternion rotation = physics_world_.GetBodyRotation(object.body_id);
 
         const bool highlighted = object.id == highlighted_object_id;
-        const Color tint = highlighted ? YELLOW : object.color;
+        const Color fill = highlighted ? Fade(YELLOW, 0.75f) : object.color;
+        const Color wire = highlighted ? GOLD : Fade(BLACK, 0.45f);
 
-        if (object.shape == SceneShapeType::Sphere)
+        switch (object.shape)
         {
-            DrawSphere(position, object.radius, tint);
-            DrawSphereWires(position,
-                            object.radius,
-                            12,
-                            12,
-                            highlighted ? GOLD : Fade(BLACK, 0.4f));
-            continue;
-        }
-
-        if (object.shape == SceneShapeType::Box || object.shape == SceneShapeType::Ground)
-        {
-            const Vector3 full_size = Vector3Scale(object.half_extents, 2.0f);
-            DrawCubeV(position, full_size, tint);
-            DrawCubeWiresV(position, full_size, highlighted ? GOLD : Fade(BLACK, 0.5f));
-
-            if (object.dynamic)
-            {
-                const Vector3 axis = QuaternionAxis(rotation);
-                const float angle = QuaternionAngle(rotation);
-                if (angle > 0.01f)
-                {
-                    const Vector3 top =
-                        Vector3Add(position, Vector3{0.0f, object.half_extents.y, 0.0f});
-                    const Vector3 dir =
-                        Vector3RotateByAxisAngle(Vector3{0.0f, 1.0f, 0.0f}, axis, angle);
-                    DrawLine3D(top, Vector3Add(top, Vector3Scale(dir, 0.8f)), RED);
-                }
-            }
+        case SceneShapeType::Sphere:
+            DrawOrientedSphere(position, object.radius, fill, wire);
+            break;
+        case SceneShapeType::Capsule:
+            DrawOrientedCapsule(position,
+                                rotation,
+                                object.half_height,
+                                object.radius,
+                                fill,
+                                wire);
+            break;
+        case SceneShapeType::Cylinder:
+            DrawOrientedCylinder(position,
+                                 rotation,
+                                 object.half_height,
+                                 object.radius,
+                                 fill,
+                                 wire);
+            break;
+        case SceneShapeType::Ground:
+        case SceneShapeType::Box:
+            DrawOrientedBox(position, rotation, object.half_extents, fill, wire);
+            break;
         }
     }
 }
@@ -133,6 +200,7 @@ int SceneSystem::AddBox(const Vector3 &position,
     object.dynamic = dynamic;
     object.half_extents = half_extents;
     object.radius = std::max({half_extents.x, half_extents.y, half_extents.z});
+    object.half_height = half_extents.y;
     object.color = color;
     object.body_id = body_id;
     objects_.push_back(object);
@@ -170,6 +238,67 @@ int SceneSystem::AddSphere(const Vector3 &position,
     object.dynamic = dynamic;
     object.half_extents = Vector3{radius, radius, radius};
     object.radius = radius;
+    object.half_height = radius;
+    object.color = color;
+    object.body_id = body_id;
+    objects_.push_back(object);
+    return object.id;
+}
+
+int SceneSystem::AddCapsule(const Vector3 &position,
+                            float half_height,
+                            float radius,
+                            Color color)
+{
+    if (color.a == 0)
+    {
+        color = RandomBrightColor();
+    }
+
+    const JPH::BodyID body_id =
+        physics_world_.CreateDynamicCapsule(position, half_height, radius);
+    if (body_id.IsInvalid())
+    {
+        return 0;
+    }
+
+    SceneObject object{};
+    object.id = next_id_++;
+    object.shape = SceneShapeType::Capsule;
+    object.dynamic = true;
+    object.half_extents = Vector3{radius, half_height + radius, radius};
+    object.radius = radius;
+    object.half_height = half_height;
+    object.color = color;
+    object.body_id = body_id;
+    objects_.push_back(object);
+    return object.id;
+}
+
+int SceneSystem::AddCylinder(const Vector3 &position,
+                             float half_height,
+                             float radius,
+                             Color color)
+{
+    if (color.a == 0)
+    {
+        color = RandomBrightColor();
+    }
+
+    const JPH::BodyID body_id =
+        physics_world_.CreateDynamicCylinder(position, half_height, radius);
+    if (body_id.IsInvalid())
+    {
+        return 0;
+    }
+
+    SceneObject object{};
+    object.id = next_id_++;
+    object.shape = SceneShapeType::Cylinder;
+    object.dynamic = true;
+    object.half_extents = Vector3{radius, half_height, radius};
+    object.radius = radius;
+    object.half_height = half_height;
     object.color = color;
     object.body_id = body_id;
     objects_.push_back(object);
@@ -314,6 +443,52 @@ int SceneSystem::DraggingObjectId() const
         return 0;
     }
     return drag_state_->object_id;
+}
+
+void SceneSystem::DrawPhysicsDebug(bool show_sleeping) const
+{
+    const auto debug_bodies = physics_world_.DebugBodies();
+    for (const PhysicsDebugBody &debug_body : debug_bodies)
+    {
+        const Vector3 position = physics_world_.GetBodyPosition(debug_body.body_id);
+        const Quaternion rotation = physics_world_.GetBodyRotation(debug_body.body_id);
+        const Color wire = debug_body.dynamic ? GREEN : DARKGREEN;
+
+        switch (debug_body.shape)
+        {
+        case PhysicsShapeType::Sphere:
+            DrawOrientedSphere(position, debug_body.radius, BLANK, wire);
+            break;
+        case PhysicsShapeType::Capsule:
+            DrawOrientedCapsule(position,
+                                rotation,
+                                debug_body.half_height,
+                                debug_body.radius,
+                                BLANK,
+                                wire);
+            break;
+        case PhysicsShapeType::Cylinder:
+            DrawOrientedCylinder(position,
+                                 rotation,
+                                 debug_body.half_height,
+                                 debug_body.radius,
+                                 BLANK,
+                                 wire);
+            break;
+        case PhysicsShapeType::Box:
+            DrawOrientedBox(position,
+                            rotation,
+                            debug_body.half_extents,
+                            BLANK,
+                            wire);
+            break;
+        }
+
+        if (show_sleeping && debug_body.dynamic)
+        {
+            DrawSphere(position, 0.03f, SKYBLUE);
+        }
+    }
 }
 
 std::optional<size_t> SceneSystem::FindObjectIndexById(int object_id)

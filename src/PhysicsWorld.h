@@ -17,6 +17,24 @@
 #include <memory>
 #include <vector>
 
+enum class PhysicsShapeType : uint8_t
+{
+    Box,
+    Sphere,
+    Capsule,
+    Cylinder,
+};
+
+struct PhysicsDebugBody
+{
+    JPH::BodyID body_id{};
+    PhysicsShapeType shape{PhysicsShapeType::Box};
+    Vector3 half_extents{0.5f, 0.5f, 0.5f};
+    float radius{0.5f};
+    float half_height{0.5f};
+    bool dynamic{true};
+};
+
 namespace Layers
 {
 static constexpr JPH::ObjectLayer NON_MOVING{0};
@@ -134,6 +152,12 @@ public:
     JPH::BodyID CreateDynamicBox(const Vector3 &center,
                                  const Vector3 &half_extents);
     JPH::BodyID CreateDynamicSphere(const Vector3 &center, float radius);
+    JPH::BodyID CreateDynamicCapsule(const Vector3 &center,
+                                     float half_height,
+                                     float radius);
+    JPH::BodyID CreateDynamicCylinder(const Vector3 &center,
+                                      float half_height,
+                                      float radius);
 
     void DestroyBody(JPH::BodyID body_id);
 
@@ -154,7 +178,11 @@ public:
 
     [[nodiscard]] bool IsBodyAdded(JPH::BodyID body_id) const;
 
+    [[nodiscard]] std::vector<PhysicsDebugBody> DebugBodies() const;
+
 private:
+    void RegisterDebugBody(const PhysicsDebugBody &debug_body);
+
     std::unique_ptr<JPH::PhysicsSystem> physics_system_;
     std::unique_ptr<JPH::TempAllocatorImpl> temp_allocator_;
     std::unique_ptr<JPH::JobSystemThreadPool> job_system_;
@@ -163,5 +191,6 @@ private:
         object_vs_broadphase_layer_filter_;
     std::unique_ptr<ObjectLayerPairFilterImpl> object_vs_object_layer_filter_;
     std::vector<JPH::BodyID> created_bodies_;
+    std::vector<PhysicsDebugBody> debug_bodies_;
     bool initialized_{false};
 };

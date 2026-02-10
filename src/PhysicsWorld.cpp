@@ -11,6 +11,8 @@
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/EActivation.h>
 #include <Jolt/RegisterTypes.h>
@@ -60,6 +62,14 @@ JPH::Vec3 ToVec3(const Vector3 &value)
 JPH::Quat ToJoltQuat(const Quaternion &rotation)
 {
     return JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w);
+}
+
+Vector3 ClampMin(const Vector3 &value, float minimum)
+{
+    return Vector3{
+        std::max(value.x, minimum),
+        std::max(value.y, minimum),
+        std::max(value.z, minimum)};
 }
 
 Quaternion ToRaylibQuaternion(JPH::QuatArg rotation)
@@ -190,8 +200,9 @@ JPH::BodyID PhysicsWorld::CreateStaticBox(const Vector3 &center,
         return JPH::BodyID();
     }
 
+    const Vector3 safe_half_extents = ClampMin(half_extents, 0.02f);
     const JPH::BodyCreationSettings settings(
-        new JPH::BoxShape(ToVec3(half_extents)),
+        new JPH::BoxShape(ToVec3(safe_half_extents)),
         ToRVec3(center),
         JPH::Quat::sIdentity(),
         JPH::EMotionType::Static,
@@ -206,6 +217,13 @@ JPH::BodyID PhysicsWorld::CreateStaticBox(const Vector3 &center,
     }
 
     created_bodies_.push_back(body_id);
+    RegisterDebugBody(PhysicsDebugBody{
+        body_id,
+        PhysicsShapeType::Box,
+        safe_half_extents,
+        0.0f,
+        0.0f,
+        false});
     return body_id;
 }
 
@@ -217,8 +235,9 @@ JPH::BodyID PhysicsWorld::CreateDynamicBox(const Vector3 &center,
         return JPH::BodyID();
     }
 
+    const Vector3 safe_half_extents = ClampMin(half_extents, 0.02f);
     const JPH::BodyCreationSettings settings(
-        new JPH::BoxShape(ToVec3(half_extents)),
+        new JPH::BoxShape(ToVec3(safe_half_extents)),
         ToRVec3(center),
         JPH::Quat::sIdentity(),
         JPH::EMotionType::Dynamic,
@@ -233,6 +252,13 @@ JPH::BodyID PhysicsWorld::CreateDynamicBox(const Vector3 &center,
     }
 
     created_bodies_.push_back(body_id);
+    RegisterDebugBody(PhysicsDebugBody{
+        body_id,
+        PhysicsShapeType::Box,
+        safe_half_extents,
+        0.0f,
+        0.0f,
+        true});
     return body_id;
 }
 
@@ -243,8 +269,9 @@ JPH::BodyID PhysicsWorld::CreateDynamicSphere(const Vector3 &center, float radiu
         return JPH::BodyID();
     }
 
+    const float safe_radius = std::max(radius, 0.05f);
     const JPH::BodyCreationSettings settings(
-        new JPH::SphereShape(radius),
+        new JPH::SphereShape(safe_radius),
         ToRVec3(center),
         JPH::Quat::sIdentity(),
         JPH::EMotionType::Dynamic,
@@ -259,6 +286,87 @@ JPH::BodyID PhysicsWorld::CreateDynamicSphere(const Vector3 &center, float radiu
     }
 
     created_bodies_.push_back(body_id);
+    RegisterDebugBody(PhysicsDebugBody{
+        body_id,
+        PhysicsShapeType::Sphere,
+        Vector3{safe_radius, safe_radius, safe_radius},
+        safe_radius,
+        0.0f,
+        true});
+    return body_id;
+}
+
+JPH::BodyID PhysicsWorld::CreateDynamicCapsule(const Vector3 &center,
+                                               float half_height,
+                                               float radius)
+{
+    if (!initialized_)
+    {
+        return JPH::BodyID();
+    }
+
+    const float safe_radius = std::max(radius, 0.05f);
+    const float safe_half_height = std::max(half_height, 0.05f);
+    const JPH::BodyCreationSettings settings(
+        new JPH::CapsuleShape(safe_half_height, safe_radius),
+        ToRVec3(center),
+        JPH::Quat::sIdentity(),
+        JPH::EMotionType::Dynamic,
+        Layers::MOVING);
+
+    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
+    const JPH::BodyID body_id =
+        body_interface.CreateAndAddBody(settings, JPH::EActivation::Activate);
+    if (body_id.IsInvalid())
+    {
+        return body_id;
+    }
+
+    created_bodies_.push_back(body_id);
+    RegisterDebugBody(PhysicsDebugBody{
+        body_id,
+        PhysicsShapeType::Capsule,
+        Vector3{safe_radius, safe_half_height + safe_radius, safe_radius},
+        safe_radius,
+        safe_half_height,
+        true});
+    return body_id;
+}
+
+JPH::BodyID PhysicsWorld::CreateDynamicCylinder(const Vector3 &center,
+                                                float half_height,
+                                                float radius)
+{
+    if (!initialized_)
+    {
+        return JPH::BodyID();
+    }
+
+    const float safe_radius = std::max(radius, 0.05f);
+    const float safe_half_height = std::max(half_height, 0.05f);
+    const JPH::BodyCreationSettings settings(
+        new JPH::CylinderShape(safe_half_height, safe_radius),
+        ToRVec3(center),
+        JPH::Quat::sIdentity(),
+        JPH::EMotionType::Dynamic,
+        Layers::MOVING);
+
+    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
+    const JPH::BodyID body_id =
+        body_interface.CreateAndAddBody(settings, JPH::EActivation::Activate);
+    if (body_id.IsInvalid())
+    {
+        return body_id;
+    }
+
+    created_bodies_.push_back(body_id);
+    RegisterDebugBody(PhysicsDebugBody{
+        body_id,
+        PhysicsShapeType::Cylinder,
+        Vector3{safe_radius, safe_half_height, safe_radius},
+        safe_radius,
+        safe_half_height,
+        true});
     return body_id;
 }
 
@@ -282,6 +390,15 @@ void PhysicsWorld::DestroyBody(JPH::BodyID body_id)
     }
     body_interface.DestroyBody(body_id);
     created_bodies_.erase(it);
+
+    const auto debug_it = std::remove_if(
+        debug_bodies_.begin(),
+        debug_bodies_.end(),
+        [body_id](const PhysicsDebugBody &debug_body)
+        {
+            return debug_body.body_id == body_id;
+        });
+    debug_bodies_.erase(debug_it, debug_bodies_.end());
 }
 
 Vector3 PhysicsWorld::GetBodyPosition(JPH::BodyID body_id) const
@@ -381,4 +498,24 @@ bool PhysicsWorld::IsBodyAdded(JPH::BodyID body_id) const
 
     const JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
     return body_interface.IsAdded(body_id);
+}
+
+std::vector<PhysicsDebugBody> PhysicsWorld::DebugBodies() const
+{
+    std::vector<PhysicsDebugBody> active_bodies;
+    active_bodies.reserve(debug_bodies_.size());
+
+    for (const PhysicsDebugBody &debug_body : debug_bodies_)
+    {
+        if (IsBodyAdded(debug_body.body_id))
+        {
+            active_bodies.push_back(debug_body);
+        }
+    }
+    return active_bodies;
+}
+
+void PhysicsWorld::RegisterDebugBody(const PhysicsDebugBody &debug_body)
+{
+    debug_bodies_.push_back(debug_body);
 }

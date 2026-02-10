@@ -39,15 +39,26 @@ FetchContent_Declare(
   GIT_TAG cede24d2733a4a473c6d486650ca9b6d0481681a
   SOURCE_SUBDIR Build)
 
+FetchContent_Declare(
+  raygui
+  GIT_REPOSITORY https://github.com/raysan5/raygui.git
+  GIT_TAG 4.0)
+
 FetchContent_MakeAvailable(raylib JoltPhysics)
+FetchContent_GetProperties(raygui)
+if(NOT raygui_POPULATED)
+  FetchContent_Populate(raygui)
+endif()
 
 add_executable(
   raylib_jolt_scene
   src/main.cpp
   src/PhysicsWorld.cpp
-  src/SceneSystem.cpp)
+  src/SceneSystem.cpp
+  src/RayGuiImpl.cpp)
 
 target_include_directories(raylib_jolt_scene PRIVATE ${JoltPhysics_SOURCE_DIR}/..)
+target_include_directories(raylib_jolt_scene PRIVATE ${raygui_SOURCE_DIR}/src)
 target_link_libraries(raylib_jolt_scene PRIVATE Jolt raylib)
 
 if(MSVC)
@@ -55,5 +66,8 @@ if(MSVC)
 else()
   target_compile_options(
     raylib_jolt_scene PRIVATE -Wall -Wextra -Wpedantic
-                               -Wno-missing-field-initializers)
+                               -Wno-missing-field-initializers
+                               -Wno-deprecated-declarations
+                               -Wno-unused-parameter
+                               -Wno-unused-but-set-variable)
 endif()

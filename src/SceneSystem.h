@@ -12,6 +12,8 @@ enum class SceneShapeType : uint8_t
 {
     Box,
     Sphere,
+    Capsule,
+    Cylinder,
     Ground,
 };
 
@@ -22,6 +24,7 @@ struct SceneObject
     bool dynamic{true};
     Vector3 half_extents{0.5f, 0.5f, 0.5f};
     float radius{0.5f};
+    float half_height{0.5f};
     Color color{WHITE};
     JPH::BodyID body_id{};
 };
@@ -43,6 +46,14 @@ public:
                   float radius,
                   bool dynamic,
                   Color color);
+    int AddCapsule(const Vector3 &position,
+                   float half_height,
+                   float radius,
+                   Color color);
+    int AddCylinder(const Vector3 &position,
+                    float half_height,
+                    float radius,
+                    Color color);
 
     bool RemoveObject(int object_id);
     bool RemoveObjectByBody(JPH::BodyID body_id);
@@ -58,6 +69,8 @@ public:
     [[nodiscard]] const std::vector<SceneObject> &Objects() const;
     [[nodiscard]] bool IsDragging() const;
     [[nodiscard]] int DraggingObjectId() const;
+
+    void DrawPhysicsDebug(bool show_sleeping = true) const;
 
 private:
     std::optional<size_t> FindObjectIndexById(int object_id);
