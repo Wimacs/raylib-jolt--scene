@@ -4,8 +4,12 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Math/Quat.h>
+#include <Jolt/Math/Vec3.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
+#include <Jolt/Physics/Body/MotionProperties.h>
 #include <Jolt/Physics/Body/MotionType.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
@@ -14,16 +18,22 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Constraints/Constraint.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/EActivation.h>
 #include <Jolt/RegisterTypes.h>
+
+#include <raymath.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <iostream>
 #include <thread>
-
-#include <raymath.h>
 
 namespace
 {
@@ -64,6 +74,14 @@ JPH::Quat ToJoltQuat(const Quaternion &rotation)
     return JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w);
 }
 
+Quaternion ToRaylibQuaternion(JPH::QuatArg rotation)
+{
+    return Quaternion{rotation.GetX(),
+                      rotation.GetY(),
+                      rotation.GetZ(),
+                      rotation.GetW()};
+}
+
 Vector3 ClampMin(const Vector3 &value, float minimum)
 {
     return Vector3{
@@ -72,12 +90,9 @@ Vector3 ClampMin(const Vector3 &value, float minimum)
         std::max(value.z, minimum)};
 }
 
-Quaternion ToRaylibQuaternion(JPH::QuatArg rotation)
+JPH::EMotionType ToMotionType(bool dynamic)
 {
-    return Quaternion{rotation.GetX(),
-                      rotation.GetY(),
-                      rotation.GetZ(),
-                      rotation.GetW()};
+    return dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static;
 }
 } // namespace
 
@@ -118,10 +133,10 @@ bool PhysicsWorld::Initialize()
     object_vs_object_layer_filter_ =
         std::make_unique<ObjectLayerPairFilterImpl>();
 
-    constexpr JPH::uint kMaxBodies = 4096;
+    constexpr JPH::uint kMaxBodies = 8192;
     constexpr JPH::uint kNumBodyMutexes = 0;
-    constexpr JPH::uint kMaxBodyPairs = 4096;
-    constexpr JPH::uint kMaxContactConstraints = 4096;
+    constexpr JPH::uint kMaxBodyPairs = 8192;
+    constexpr JPH::uint kMaxContactConstraints = 8192;
 
     physics_system_ = std::make_unique<JPH::PhysicsSystem>();
     physics_system_->Init(kMaxBodies,
@@ -144,6 +159,8 @@ void PhysicsWorld::Shutdown()
         return;
     }
 
+    ClearConstraints();
+
     if (physics_system_ != nullptr)
     {
         JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
@@ -163,6 +180,9 @@ void PhysicsWorld::Shutdown()
     }
 
     created_bodies_.clear();
+    debug_bodies_.clear();
+    constraints_.clear();
+
     physics_system_.reset();
     job_system_.reset();
     temp_allocator_.reset();
@@ -195,179 +215,165 @@ void PhysicsWorld::Step(float delta_time)
 JPH::BodyID PhysicsWorld::CreateStaticBox(const Vector3 &center,
                                           const Vector3 &half_extents)
 {
-    if (!initialized_)
-    {
-        return JPH::BodyID();
-    }
-
-    const Vector3 safe_half_extents = ClampMin(half_extents, 0.02f);
-    const JPH::BodyCreationSettings settings(
-        new JPH::BoxShape(ToVec3(safe_half_extents)),
-        ToRVec3(center),
-        JPH::Quat::sIdentity(),
-        JPH::EMotionType::Static,
-        Layers::NON_MOVING);
-
-    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
-    const JPH::BodyID body_id =
-        body_interface.CreateAndAddBody(settings, JPH::EActivation::DontActivate);
-    if (body_id.IsInvalid())
-    {
-        return body_id;
-    }
-
-    created_bodies_.push_back(body_id);
-    RegisterDebugBody(PhysicsDebugBody{
-        body_id,
-        PhysicsShapeType::Box,
-        safe_half_extents,
-        0.0f,
-        0.0f,
-        false});
-    return body_id;
+    BodyPhysicsParams params{};
+    return CreateBox(center, half_extents, false, params).body_id;
 }
 
 JPH::BodyID PhysicsWorld::CreateDynamicBox(const Vector3 &center,
                                            const Vector3 &half_extents)
 {
-    if (!initialized_)
-    {
-        return JPH::BodyID();
-    }
-
-    const Vector3 safe_half_extents = ClampMin(half_extents, 0.02f);
-    const JPH::BodyCreationSettings settings(
-        new JPH::BoxShape(ToVec3(safe_half_extents)),
-        ToRVec3(center),
-        JPH::Quat::sIdentity(),
-        JPH::EMotionType::Dynamic,
-        Layers::MOVING);
-
-    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
-    const JPH::BodyID body_id =
-        body_interface.CreateAndAddBody(settings, JPH::EActivation::Activate);
-    if (body_id.IsInvalid())
-    {
-        return body_id;
-    }
-
-    created_bodies_.push_back(body_id);
-    RegisterDebugBody(PhysicsDebugBody{
-        body_id,
-        PhysicsShapeType::Box,
-        safe_half_extents,
-        0.0f,
-        0.0f,
-        true});
-    return body_id;
+    BodyPhysicsParams params{};
+    return CreateBox(center, half_extents, true, params).body_id;
 }
 
 JPH::BodyID PhysicsWorld::CreateDynamicSphere(const Vector3 &center, float radius)
 {
-    if (!initialized_)
-    {
-        return JPH::BodyID();
-    }
-
-    const float safe_radius = std::max(radius, 0.05f);
-    const JPH::BodyCreationSettings settings(
-        new JPH::SphereShape(safe_radius),
-        ToRVec3(center),
-        JPH::Quat::sIdentity(),
-        JPH::EMotionType::Dynamic,
-        Layers::MOVING);
-
-    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
-    const JPH::BodyID body_id =
-        body_interface.CreateAndAddBody(settings, JPH::EActivation::Activate);
-    if (body_id.IsInvalid())
-    {
-        return body_id;
-    }
-
-    created_bodies_.push_back(body_id);
-    RegisterDebugBody(PhysicsDebugBody{
-        body_id,
-        PhysicsShapeType::Sphere,
-        Vector3{safe_radius, safe_radius, safe_radius},
-        safe_radius,
-        0.0f,
-        true});
-    return body_id;
+    BodyPhysicsParams params{};
+    return CreateSphere(center, radius, true, params).body_id;
 }
 
 JPH::BodyID PhysicsWorld::CreateDynamicCapsule(const Vector3 &center,
                                                float half_height,
                                                float radius)
 {
-    if (!initialized_)
-    {
-        return JPH::BodyID();
-    }
-
-    const float safe_radius = std::max(radius, 0.05f);
-    const float safe_half_height = std::max(half_height, 0.05f);
-    const JPH::BodyCreationSettings settings(
-        new JPH::CapsuleShape(safe_half_height, safe_radius),
-        ToRVec3(center),
-        JPH::Quat::sIdentity(),
-        JPH::EMotionType::Dynamic,
-        Layers::MOVING);
-
-    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
-    const JPH::BodyID body_id =
-        body_interface.CreateAndAddBody(settings, JPH::EActivation::Activate);
-    if (body_id.IsInvalid())
-    {
-        return body_id;
-    }
-
-    created_bodies_.push_back(body_id);
-    RegisterDebugBody(PhysicsDebugBody{
-        body_id,
-        PhysicsShapeType::Capsule,
-        Vector3{safe_radius, safe_half_height + safe_radius, safe_radius},
-        safe_radius,
-        safe_half_height,
-        true});
-    return body_id;
+    BodyPhysicsParams params{};
+    return CreateCapsule(center, half_height, radius, true, params).body_id;
 }
 
 JPH::BodyID PhysicsWorld::CreateDynamicCylinder(const Vector3 &center,
                                                 float half_height,
                                                 float radius)
 {
-    if (!initialized_)
-    {
-        return JPH::BodyID();
-    }
+    BodyPhysicsParams params{};
+    return CreateCylinder(center, half_height, radius, true, params).body_id;
+}
 
+BodySpawnResult PhysicsWorld::CreateBox(const Vector3 &center,
+                                        const Vector3 &half_extents,
+                                        bool dynamic,
+                                        const BodyPhysicsParams &params)
+{
+    const Vector3 safe_half_extents = ClampMin(half_extents, 0.02f);
+    JPH::BodyCreationSettings settings(
+        new JPH::BoxShape(ToVec3(safe_half_extents)),
+        ToRVec3(center),
+        JPH::Quat::sIdentity(),
+        ToMotionType(dynamic),
+        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+    ApplyBodyPhysicsParams(settings, params, dynamic);
+
+    const PhysicsDebugBody debug{
+        JPH::BodyID(),
+        PhysicsShapeType::Box,
+        safe_half_extents,
+        0.0f,
+        0.0f,
+        dynamic};
+
+    const JPH::BodyID body_id =
+        CreateBodyWithSettings(settings, debug, dynamic && !params.is_sensor);
+    BodySpawnResult result{};
+    result.body_id = body_id;
+    result.debug_body = debug;
+    result.debug_body.body_id = body_id;
+    return result;
+}
+
+BodySpawnResult PhysicsWorld::CreateSphere(const Vector3 &center,
+                                           float radius,
+                                           bool dynamic,
+                                           const BodyPhysicsParams &params)
+{
+    const float safe_radius = std::max(radius, 0.05f);
+    JPH::BodyCreationSettings settings(
+        new JPH::SphereShape(safe_radius),
+        ToRVec3(center),
+        JPH::Quat::sIdentity(),
+        ToMotionType(dynamic),
+        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+    ApplyBodyPhysicsParams(settings, params, dynamic);
+
+    const PhysicsDebugBody debug{
+        JPH::BodyID(),
+        PhysicsShapeType::Sphere,
+        Vector3{safe_radius, safe_radius, safe_radius},
+        safe_radius,
+        0.0f,
+        dynamic};
+
+    const JPH::BodyID body_id =
+        CreateBodyWithSettings(settings, debug, dynamic && !params.is_sensor);
+    BodySpawnResult result{};
+    result.body_id = body_id;
+    result.debug_body = debug;
+    result.debug_body.body_id = body_id;
+    return result;
+}
+
+BodySpawnResult PhysicsWorld::CreateCapsule(const Vector3 &center,
+                                            float half_height,
+                                            float radius,
+                                            bool dynamic,
+                                            const BodyPhysicsParams &params)
+{
     const float safe_radius = std::max(radius, 0.05f);
     const float safe_half_height = std::max(half_height, 0.05f);
-    const JPH::BodyCreationSettings settings(
+    JPH::BodyCreationSettings settings(
+        new JPH::CapsuleShape(safe_half_height, safe_radius),
+        ToRVec3(center),
+        JPH::Quat::sIdentity(),
+        ToMotionType(dynamic),
+        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+    ApplyBodyPhysicsParams(settings, params, dynamic);
+
+    const PhysicsDebugBody debug{
+        JPH::BodyID(),
+        PhysicsShapeType::Capsule,
+        Vector3{safe_radius, safe_half_height + safe_radius, safe_radius},
+        safe_radius,
+        safe_half_height,
+        dynamic};
+
+    const JPH::BodyID body_id =
+        CreateBodyWithSettings(settings, debug, dynamic && !params.is_sensor);
+    BodySpawnResult result{};
+    result.body_id = body_id;
+    result.debug_body = debug;
+    result.debug_body.body_id = body_id;
+    return result;
+}
+
+BodySpawnResult PhysicsWorld::CreateCylinder(const Vector3 &center,
+                                             float half_height,
+                                             float radius,
+                                             bool dynamic,
+                                             const BodyPhysicsParams &params)
+{
+    const float safe_radius = std::max(radius, 0.05f);
+    const float safe_half_height = std::max(half_height, 0.05f);
+    JPH::BodyCreationSettings settings(
         new JPH::CylinderShape(safe_half_height, safe_radius),
         ToRVec3(center),
         JPH::Quat::sIdentity(),
-        JPH::EMotionType::Dynamic,
-        Layers::MOVING);
+        ToMotionType(dynamic),
+        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+    ApplyBodyPhysicsParams(settings, params, dynamic);
 
-    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
-    const JPH::BodyID body_id =
-        body_interface.CreateAndAddBody(settings, JPH::EActivation::Activate);
-    if (body_id.IsInvalid())
-    {
-        return body_id;
-    }
-
-    created_bodies_.push_back(body_id);
-    RegisterDebugBody(PhysicsDebugBody{
-        body_id,
+    const PhysicsDebugBody debug{
+        JPH::BodyID(),
         PhysicsShapeType::Cylinder,
         Vector3{safe_radius, safe_half_height, safe_radius},
         safe_radius,
         safe_half_height,
-        true});
-    return body_id;
+        dynamic};
+
+    const JPH::BodyID body_id =
+        CreateBodyWithSettings(settings, debug, dynamic && !params.is_sensor);
+    BodySpawnResult result{};
+    result.body_id = body_id;
+    result.debug_body = debug;
+    result.debug_body.body_id = body_id;
+    return result;
 }
 
 void PhysicsWorld::DestroyBody(JPH::BodyID body_id)
@@ -376,6 +382,8 @@ void PhysicsWorld::DestroyBody(JPH::BodyID body_id)
     {
         return;
     }
+
+    RemoveConstraintsForBody(body_id);
 
     auto it = std::find(created_bodies_.begin(), created_bodies_.end(), body_id);
     if (it == created_bodies_.end())
@@ -454,11 +462,55 @@ void PhysicsWorld::SetBodyVelocityZero(JPH::BodyID body_id)
     body_interface.SetAngularVelocity(body_id, JPH::Vec3::sZero());
 }
 
+bool PhysicsWorld::SetBodyPhysicsParams(JPH::BodyID body_id,
+                                        const BodyPhysicsParams &params,
+                                        bool activate)
+{
+    if (!initialized_ || body_id.IsInvalid() || !IsBodyAdded(body_id))
+    {
+        return false;
+    }
+
+    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
+    body_interface.SetFriction(body_id, params.friction);
+    body_interface.SetRestitution(body_id, params.restitution);
+    body_interface.SetGravityFactor(body_id, params.gravity_factor);
+    body_interface.SetUseManifoldReduction(body_id, params.use_manifold_reduction);
+
+    const JPH::BodyLockInterface &lock_interface = physics_system_->GetBodyLockInterface();
+    JPH::BodyLockWrite lock(lock_interface, body_id);
+    if (!lock.Succeeded())
+    {
+        return false;
+    }
+
+    JPH::Body &body = lock.GetBody();
+    body.SetIsSensor(params.is_sensor);
+    body.SetCollideKinematicVsNonDynamic(params.collide_kinematic_vs_non_dynamic);
+    body.SetApplyGyroscopicForce(params.apply_gyroscopic_force);
+    body.SetEnhancedInternalEdgeRemoval(params.enhanced_internal_edge_removal);
+    body.SetAllowSleeping(params.allow_sleeping);
+
+    if (JPH::MotionProperties *motion = body.GetMotionPropertiesUnchecked(); motion != nullptr)
+    {
+        motion->SetLinearDamping(params.linear_damping);
+        motion->SetAngularDamping(params.angular_damping);
+        motion->SetMaxLinearVelocity(params.max_linear_velocity);
+        motion->SetMaxAngularVelocity(params.max_angular_velocity);
+    }
+
+    if (activate)
+    {
+        body_interface.ActivateBody(body_id);
+    }
+    return true;
+}
+
 bool PhysicsWorld::RayCast(const Vector3 &origin,
-                          const Vector3 &direction,
-                          float max_distance,
-                          JPH::BodyID &out_body_id,
-                          Vector3 &out_hit_point) const
+                           const Vector3 &direction,
+                           float max_distance,
+                           JPH::BodyID &out_body_id,
+                           Vector3 &out_hit_point) const
 {
     out_body_id = JPH::BodyID();
     out_hit_point = Vector3Zero();
@@ -513,6 +565,326 @@ std::vector<PhysicsDebugBody> PhysicsWorld::DebugBodies() const
         }
     }
     return active_bodies;
+}
+
+bool PhysicsWorld::AddConstraint(const ConstraintDesc &desc)
+{
+    if (!initialized_ || physics_system_ == nullptr || desc.body2.IsInvalid())
+    {
+        return false;
+    }
+
+    if (!IsBodyAdded(desc.body2))
+    {
+        return false;
+    }
+
+    if (!desc.body1.IsInvalid() && !IsBodyAdded(desc.body1))
+    {
+        return false;
+    }
+
+    if (!desc.body1.IsInvalid() && desc.body1 == desc.body2)
+    {
+        return false;
+    }
+
+    ConstraintDesc normalized = desc;
+    if (normalized.min_limit > normalized.max_limit)
+    {
+        std::swap(normalized.min_limit, normalized.max_limit);
+    }
+
+    JPH::Ref<JPH::Constraint> constraint;
+
+    auto create_constraint = [&](JPH::Body &body1, JPH::Body &body2) -> bool
+    {
+        switch (normalized.type)
+        {
+        case ConstraintType::Fixed:
+        {
+            JPH::FixedConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mAutoDetectPoint = normalized.auto_detect_point;
+            settings.mPoint1 = ToRVec3(normalized.point1);
+            settings.mPoint2 = ToRVec3(normalized.point2);
+            settings.mAxisX1 = ToVec3(normalized.axis1);
+            settings.mAxisY1 = ToVec3(normalized.normal1);
+            settings.mAxisX2 = ToVec3(normalized.axis2);
+            settings.mAxisY2 = ToVec3(normalized.normal2);
+            settings.mEnabled = normalized.enabled;
+            constraint = settings.Create(body1, body2);
+            return constraint != nullptr;
+        }
+        case ConstraintType::Point:
+        {
+            JPH::PointConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mPoint1 = ToRVec3(normalized.point1);
+            settings.mPoint2 = ToRVec3(normalized.point2);
+            settings.mEnabled = normalized.enabled;
+            constraint = settings.Create(body1, body2);
+            return constraint != nullptr;
+        }
+        case ConstraintType::Distance:
+        {
+            JPH::DistanceConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mPoint1 = ToRVec3(normalized.point1);
+            settings.mPoint2 = ToRVec3(normalized.point2);
+            settings.mMinDistance = normalized.min_limit;
+            settings.mMaxDistance = normalized.max_limit;
+            settings.mEnabled = normalized.enabled;
+            constraint = settings.Create(body1, body2);
+            return constraint != nullptr;
+        }
+        case ConstraintType::Hinge:
+        {
+            JPH::HingeConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mPoint1 = ToRVec3(normalized.point1);
+            settings.mPoint2 = ToRVec3(normalized.point2);
+            settings.mHingeAxis1 = ToVec3(normalized.axis1);
+            settings.mHingeAxis2 = ToVec3(normalized.axis2);
+            settings.mNormalAxis1 = ToVec3(normalized.normal1);
+            settings.mNormalAxis2 = ToVec3(normalized.normal2);
+            settings.mLimitsMin = normalized.min_limit;
+            settings.mLimitsMax = normalized.max_limit;
+            settings.mMaxFrictionTorque = normalized.max_friction;
+            settings.mMotorSettings.mSpringSettings.mFrequency = normalized.motor.spring_frequency;
+            settings.mMotorSettings.mSpringSettings.mDamping = normalized.motor.spring_damping;
+            settings.mMotorSettings.SetForceLimit(normalized.motor.max_force);
+            settings.mMotorSettings.SetTorqueLimit(normalized.motor.max_torque);
+            settings.mEnabled = normalized.enabled;
+
+            JPH::Constraint *raw = settings.Create(body1, body2);
+            if (raw == nullptr)
+            {
+                return false;
+            }
+            auto *hinge = static_cast<JPH::HingeConstraint *>(raw);
+            hinge->SetMotorState(ToJoltMotorState(normalized.motor.mode));
+            hinge->SetTargetAngularVelocity(normalized.motor.target_velocity);
+            hinge->SetTargetAngle(normalized.motor.target_position);
+            constraint = hinge;
+            return true;
+        }
+        case ConstraintType::Slider:
+        {
+            JPH::SliderConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mAutoDetectPoint = normalized.auto_detect_point;
+            settings.mPoint1 = ToRVec3(normalized.point1);
+            settings.mPoint2 = ToRVec3(normalized.point2);
+            settings.mSliderAxis1 = ToVec3(normalized.axis1);
+            settings.mSliderAxis2 = ToVec3(normalized.axis2);
+            settings.mNormalAxis1 = ToVec3(normalized.normal1);
+            settings.mNormalAxis2 = ToVec3(normalized.normal2);
+            settings.mLimitsMin = normalized.min_limit;
+            settings.mLimitsMax = normalized.max_limit;
+            settings.mMaxFrictionForce = normalized.max_friction;
+            settings.mMotorSettings.mSpringSettings.mFrequency = normalized.motor.spring_frequency;
+            settings.mMotorSettings.mSpringSettings.mDamping = normalized.motor.spring_damping;
+            settings.mMotorSettings.SetForceLimit(normalized.motor.max_force);
+            settings.mMotorSettings.SetTorqueLimit(normalized.motor.max_torque);
+            settings.mEnabled = normalized.enabled;
+
+            JPH::Constraint *raw = settings.Create(body1, body2);
+            if (raw == nullptr)
+            {
+                return false;
+            }
+            auto *slider = static_cast<JPH::SliderConstraint *>(raw);
+            slider->SetMotorState(ToJoltMotorState(normalized.motor.mode));
+            slider->SetTargetVelocity(normalized.motor.target_velocity);
+            slider->SetTargetPosition(normalized.motor.target_position);
+            constraint = slider;
+            return true;
+        }
+        }
+        return false;
+    };
+
+    if (desc.body1.IsInvalid())
+    {
+        const JPH::BodyLockInterface &lock_interface = physics_system_->GetBodyLockInterface();
+        JPH::BodyLockWrite lock(lock_interface, desc.body2);
+        if (!lock.Succeeded())
+        {
+            return false;
+        }
+
+        JPH::Body &body2 = lock.GetBody();
+        if (!create_constraint(JPH::Body::sFixedToWorld, body2))
+        {
+            return false;
+        }
+    }
+    else
+    {
+        const JPH::BodyID ids[2] = {desc.body1, desc.body2};
+        const JPH::BodyLockInterface &lock_interface = physics_system_->GetBodyLockInterface();
+        JPH::BodyLockMultiWrite lock(lock_interface, ids, 2);
+
+        JPH::Body *body1 = lock.GetBody(0);
+        JPH::Body *body2 = lock.GetBody(1);
+        if (body1 == nullptr || body2 == nullptr)
+        {
+            return false;
+        }
+
+        if (!create_constraint(*body1, *body2))
+        {
+            return false;
+        }
+    }
+
+    if (constraint == nullptr)
+    {
+        return false;
+    }
+
+    physics_system_->AddConstraint(constraint.GetPtr());
+
+    ConstraintHandle handle{};
+    handle.id = normalized.id;
+    handle.type = normalized.type;
+    handle.constraint = constraint;
+    handle.body1 = normalized.body1;
+    handle.body2 = normalized.body2;
+    handle.desc = normalized;
+    constraints_.push_back(handle);
+    return true;
+}
+bool PhysicsWorld::RemoveConstraintById(const std::string &id)
+{
+    const auto it = std::find_if(
+        constraints_.begin(),
+        constraints_.end(),
+        [&id](const ConstraintHandle &handle)
+        {
+            return handle.id == id;
+        });
+    if (it == constraints_.end())
+    {
+        return false;
+    }
+
+    physics_system_->RemoveConstraint(it->constraint.GetPtr());
+    constraints_.erase(it);
+    return true;
+}
+
+bool PhysicsWorld::RemoveConstraintsForBody(JPH::BodyID body_id)
+{
+    if (body_id.IsInvalid())
+    {
+        return false;
+    }
+
+    bool removed_any = false;
+    for (auto it = constraints_.begin(); it != constraints_.end();)
+    {
+        if (it->body1 == body_id || it->body2 == body_id)
+        {
+            physics_system_->RemoveConstraint(it->constraint.GetPtr());
+            it = constraints_.erase(it);
+            removed_any = true;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    return removed_any;
+}
+
+void PhysicsWorld::ClearConstraints()
+{
+    if (!initialized_ || physics_system_ == nullptr)
+    {
+        constraints_.clear();
+        return;
+    }
+
+    for (const ConstraintHandle &handle : constraints_)
+    {
+        physics_system_->RemoveConstraint(handle.constraint.GetPtr());
+    }
+    constraints_.clear();
+}
+
+const std::vector<ConstraintHandle> &PhysicsWorld::Constraints() const
+{
+    return constraints_;
+}
+
+JPH::BodyID PhysicsWorld::CreateBodyWithSettings(const JPH::BodyCreationSettings &settings,
+                                                 const PhysicsDebugBody &debug_body,
+                                                 bool activate)
+{
+    if (!initialized_)
+    {
+        return JPH::BodyID();
+    }
+
+    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
+    const JPH::BodyID body_id = body_interface.CreateAndAddBody(
+        settings,
+        activate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+    if (body_id.IsInvalid())
+    {
+        return body_id;
+    }
+
+    created_bodies_.push_back(body_id);
+    PhysicsDebugBody stored = debug_body;
+    stored.body_id = body_id;
+    RegisterDebugBody(stored);
+    return body_id;
+}
+
+void PhysicsWorld::ApplyBodyPhysicsParams(JPH::BodyCreationSettings &settings,
+                                          const BodyPhysicsParams &params,
+                                          bool dynamic) const
+{
+    settings.mFriction = params.friction;
+    settings.mRestitution = params.restitution;
+    settings.mLinearDamping = params.linear_damping;
+    settings.mAngularDamping = params.angular_damping;
+    settings.mGravityFactor = params.gravity_factor;
+    settings.mMaxLinearVelocity = params.max_linear_velocity;
+    settings.mMaxAngularVelocity = params.max_angular_velocity;
+    settings.mAllowSleeping = params.allow_sleeping;
+    settings.mIsSensor = params.is_sensor;
+    settings.mUseManifoldReduction = params.use_manifold_reduction;
+    settings.mApplyGyroscopicForce = params.apply_gyroscopic_force;
+    settings.mEnhancedInternalEdgeRemoval = params.enhanced_internal_edge_removal;
+    settings.mCollideKinematicVsNonDynamic = params.collide_kinematic_vs_non_dynamic;
+    settings.mAllowDynamicOrKinematic = params.allow_dynamic_or_kinematic;
+    settings.mMotionQuality = params.use_linear_cast
+                                  ? JPH::EMotionQuality::LinearCast
+                                  : JPH::EMotionQuality::Discrete;
+
+    if (dynamic && params.use_custom_mass)
+    {
+        settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+        settings.mMassPropertiesOverride.mMass = std::max(params.mass, 0.01f);
+    }
+}
+
+JPH::EMotorState PhysicsWorld::ToJoltMotorState(MotorMode mode)
+{
+    switch (mode)
+    {
+    case MotorMode::Velocity:
+        return JPH::EMotorState::Velocity;
+    case MotorMode::Position:
+        return JPH::EMotorState::Position;
+    case MotorMode::Off:
+    default:
+        return JPH::EMotorState::Off;
+    }
 }
 
 void PhysicsWorld::RegisterDebugBody(const PhysicsDebugBody &debug_body)

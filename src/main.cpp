@@ -7,7 +7,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <filesystem>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -36,12 +39,157 @@ enum class AddShapeType : int
     Capsule = 2,
     Cylinder = 3,
 };
+
+void AddShapeFromUi(SceneSystem &scene,
+                    AddShapeType shape,
+                    const Vector3 &spawn,
+                    float size_x,
+                    float size_y,
+                    float size_z,
+                    float radius,
+                    float half_height)
+{
+    switch (shape)
+    {
+    case AddShapeType::Box:
+        scene.AddBox(spawn,
+                     Vector3{size_x, size_y, size_z},
+                     true,
+                     Color{0, 0, 0, 0});
+        break;
+    case AddShapeType::Sphere:
+        scene.AddSphere(spawn, radius, true, Color{0, 0, 0, 0});
+        break;
+    case AddShapeType::Capsule:
+        scene.AddCapsule(spawn, half_height, radius, Color{0, 0, 0, 0});
+        break;
+    case AddShapeType::Cylinder:
+        scene.AddCylinder(spawn, half_height, radius, Color{0, 0, 0, 0});
+        break;
+    }
+}
+
+std::string ResolveScenePathForLoad(const char *path)
+{
+    namespace fs = std::filesystem;
+
+    if (path == nullptr || path[0] == '\0')
+    {
+        return {};
+    }
+
+    const fs::path input(path);
+    std::vector<fs::path> candidates;
+    candidates.push_back(input);
+
+    if (input.is_relative())
+    {
+        const char *app_dir_raw = GetApplicationDirectory();
+        if (app_dir_raw != nullptr && app_dir_raw[0] != '\0')
+        {
+            const fs::path app_dir(app_dir_raw);
+            candidates.push_back(app_dir / input);
+            candidates.push_back(app_dir / ".." / input);
+            candidates.push_back(app_dir / ".." / ".." / input);
+        }
+    }
+
+    for (const fs::path &candidate : candidates)
+    {
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && fs::is_regular_file(candidate, ec))
+        {
+            return candidate.lexically_normal().string();
+        }
+    }
+
+    return input.string();
+}
+
+std::string ResolveScenePathForSave(const char *path)
+{
+    namespace fs = std::filesystem;
+
+    if (path == nullptr || path[0] == '\0')
+    {
+        return {};
+    }
+
+    const fs::path input(path);
+    if (!input.is_relative())
+    {
+        return input.string();
+    }
+
+    const std::string existing = ResolveScenePathForLoad(path);
+    if (!existing.empty() && existing != input.string())
+    {
+        return existing;
+    }
+
+    const char *app_dir_raw = GetApplicationDirectory();
+    if (app_dir_raw != nullptr && app_dir_raw[0] != '\0')
+    {
+        const fs::path target = fs::path(app_dir_raw) / ".." / input;
+        return target.lexically_normal().string();
+    }
+
+    return input.string();
+}
+
+bool SaveScene(SceneSystem &scene,
+               const char *path,
+               std::string &status,
+               Color &status_color)
+{
+    const std::string resolved_path = ResolveScenePathForSave(path);
+    const bool ok = scene.SaveToJson(resolved_path);
+    if (ok)
+    {
+        status = std::string("Saved scene to: ") + resolved_path;
+        status_color = DARKGREEN;
+    }
+    else
+    {
+        status = std::string("Save failed: ") + resolved_path;
+        status_color = MAROON;
+    }
+    return ok;
+}
+
+bool LoadScene(SceneSystem &scene,
+               const char *path,
+               std::string &status,
+               Color &status_color,
+               int &hovered_object_id,
+               int &selected_object_id)
+{
+    const std::string resolved_path = ResolveScenePathForLoad(path);
+
+    std::string error;
+    const bool ok = scene.LoadFromJson(resolved_path, error);
+    if (ok)
+    {
+        scene.EndDrag();
+        hovered_object_id = 0;
+        selected_object_id = 0;
+        status = std::string("Loaded scene from: ") + resolved_path;
+        status_color = DARKGREEN;
+    }
+    else
+    {
+        status = std::string("Load failed: ") + error;
+        status_color = MAROON;
+    }
+    return ok;
+}
 } // namespace
 
 int main()
 {
-    SetConfigFlags(FLAG_MSAA_4X_HINT);
+    SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
     InitWindow(1600, 960, "Raylib + Jolt Scene System");
+    SetWindowMinSize(1120, 720);
     SetTargetFPS(120);
 
     Camera3D camera{};
@@ -71,6 +219,23 @@ int main()
     float add_radius = 0.35f;
     float add_half_height = 0.50f;
 
+    std::array<char, 256> scene_json_path{};
+    std::snprintf(scene_json_path.data(), scene_json_path.size(), "%s", "scene_default_showcase.json");
+    bool editing_scene_json_path = false;
+    std::string scene_io_status = "Ready";
+    Color scene_io_status_color = DARKGREEN;
+
+    if (!LoadScene(scene,
+                   scene_json_path.data(),
+                   scene_io_status,
+                   scene_io_status_color,
+                   hovered_object_id,
+                   selected_object_id))
+    {
+        scene_io_status = "Default showcase not found. Using built-in scene.";
+        scene_io_status_color = ORANGE;
+    }
+
     while (!WindowShouldClose())
     {
         const float dt = GetFrameTime();
@@ -87,6 +252,22 @@ int main()
         if (IsKeyPressed(KEY_F3))
         {
             show_help = !show_help;
+        }
+        if (IsKeyPressed(KEY_F5))
+        {
+            SaveScene(scene,
+                      scene_json_path.data(),
+                      scene_io_status,
+                      scene_io_status_color);
+        }
+        if (IsKeyPressed(KEY_F9))
+        {
+            LoadScene(scene,
+                      scene_json_path.data(),
+                      scene_io_status,
+                      scene_io_status_color,
+                      hovered_object_id,
+                      selected_object_id);
         }
 
         UpdateCamera(&camera, CAMERA_FREE);
@@ -176,101 +357,129 @@ int main()
 
         if (show_ui)
         {
-            const Rectangle panel = Rectangle{16, 16, 380, 420};
+            const float panel_x = 16.0f;
+            const float panel_y = 16.0f;
+            const float panel_w = 400.0f;
+            const float panel_h = std::max(700.0f, static_cast<float>(GetScreenHeight()) - 32.0f);
+            const Rectangle panel = Rectangle{panel_x, panel_y, panel_w, panel_h};
             GuiPanel(panel, "Scene Controls");
 
-            float y = panel.y + 36;
-            const float x = panel.x + 16;
+            float y = panel.y + 36.0f;
+            const float x = panel.x + 16.0f;
 
-            GuiLabel(Rectangle{x, y, 150, 22}, "Spawn Shape");
-            y += 26;
+            GuiLabel(Rectangle{x, y, 220, 22}, "Spawn Shape");
+            y += 26.0f;
 
-            GuiToggleGroup(Rectangle{x, y, 350, 28},
+            GuiToggleGroup(Rectangle{x, y, 360, 28},
                            "Box;Sphere;Capsule;Cylinder",
                            &add_shape_index);
-            y += 44;
+            y += 44.0f;
 
-            GuiLabel(Rectangle{x, y, 140, 22}, "Box Half Extents");
-            y += 24;
-            GuiSliderBar(Rectangle{x, y, 350, 20}, "X", TextFormat("%.2f", add_size_x), &add_size_x, 0.10f, 2.00f);
-            y += 26;
-            GuiSliderBar(Rectangle{x, y, 350, 20}, "Y", TextFormat("%.2f", add_size_y), &add_size_y, 0.10f, 2.00f);
-            y += 26;
-            GuiSliderBar(Rectangle{x, y, 350, 20}, "Z", TextFormat("%.2f", add_size_z), &add_size_z, 0.10f, 2.00f);
-            y += 34;
+            GuiLabel(Rectangle{x, y, 180, 22}, "Box Half Extents (m)");
+            y += 24.0f;
+            GuiSliderBar(Rectangle{x, y, 360, 20}, "X", TextFormat("%.2f", add_size_x), &add_size_x, 0.10f, 2.00f);
+            y += 26.0f;
+            GuiSliderBar(Rectangle{x, y, 360, 20}, "Y", TextFormat("%.2f", add_size_y), &add_size_y, 0.10f, 2.00f);
+            y += 26.0f;
+            GuiSliderBar(Rectangle{x, y, 360, 20}, "Z", TextFormat("%.2f", add_size_z), &add_size_z, 0.10f, 2.00f);
+            y += 34.0f;
 
-            GuiLabel(Rectangle{x, y, 140, 22}, "Round Shapes");
-            y += 24;
-            GuiSliderBar(Rectangle{x, y, 350, 20}, "Radius", TextFormat("%.2f", add_radius), &add_radius, 0.05f, 1.50f);
-            y += 26;
-            GuiSliderBar(Rectangle{x, y, 350, 20}, "Half Height", TextFormat("%.2f", add_half_height), &add_half_height, 0.05f, 1.50f);
-            y += 40;
+            GuiLabel(Rectangle{x, y, 180, 22}, "Round Shapes (m)");
+            y += 24.0f;
+            GuiSliderBar(Rectangle{x, y, 360, 20}, "Radius", TextFormat("%.2f", add_radius), &add_radius, 0.05f, 1.50f);
+            y += 26.0f;
+            GuiSliderBar(Rectangle{x, y, 360, 20}, "Half Height", TextFormat("%.2f", add_half_height), &add_half_height, 0.05f, 1.50f);
+            y += 40.0f;
 
-            if (GuiButton(Rectangle{x, y, 170, 30}, "Add At Camera"))
+            if (GuiButton(Rectangle{x, y, 176, 30}, "Add At Camera"))
             {
                 const Vector3 spawn = SpawnPositionFromCamera(camera);
-                const AddShapeType shape = static_cast<AddShapeType>(add_shape_index);
-
-                switch (shape)
-                {
-                case AddShapeType::Box:
-                    scene.AddBox(spawn,
-                                 Vector3{add_size_x, add_size_y, add_size_z},
-                                 true,
-                                 Color{0, 0, 0, 0});
-                    break;
-                case AddShapeType::Sphere:
-                    scene.AddSphere(spawn, add_radius, true, Color{0, 0, 0, 0});
-                    break;
-                case AddShapeType::Capsule:
-                    scene.AddCapsule(spawn, add_half_height, add_radius, Color{0, 0, 0, 0});
-                    break;
-                case AddShapeType::Cylinder:
-                    scene.AddCylinder(spawn, add_half_height, add_radius, Color{0, 0, 0, 0});
-                    break;
-                }
+                AddShapeFromUi(scene,
+                               static_cast<AddShapeType>(add_shape_index),
+                               spawn,
+                               add_size_x,
+                               add_size_y,
+                               add_size_z,
+                               add_radius,
+                               add_half_height);
             }
 
-            if (GuiButton(Rectangle{x + 180, y, 170, 30}, "Delete Selected"))
+            if (GuiButton(Rectangle{x + 184, y, 176, 30}, "Delete Selected"))
             {
                 if (selected_object_id != 0 && scene.RemoveObject(selected_object_id))
                 {
                     selected_object_id = 0;
                 }
             }
-            y += 44;
+            y += 42.0f;
+
+            GuiLabel(Rectangle{x, y, 220, 22}, "Scene JSON Path");
+            y += 24.0f;
+            if (GuiTextBox(Rectangle{x, y, 360, 30},
+                           scene_json_path.data(),
+                           static_cast<int>(scene_json_path.size()),
+                           editing_scene_json_path))
+            {
+                editing_scene_json_path = !editing_scene_json_path;
+            }
+            y += 40.0f;
+
+            if (GuiButton(Rectangle{x, y, 176, 30}, "Save Scene JSON"))
+            {
+                SaveScene(scene,
+                          scene_json_path.data(),
+                          scene_io_status,
+                          scene_io_status_color);
+            }
+
+            if (GuiButton(Rectangle{x + 184, y, 176, 30}, "Load Scene JSON"))
+            {
+                LoadScene(scene,
+                          scene_json_path.data(),
+                          scene_io_status,
+                          scene_io_status_color,
+                          hovered_object_id,
+                          selected_object_id);
+            }
+            y += 40.0f;
+
+            DrawText(scene_io_status.c_str(), static_cast<int>(x), static_cast<int>(y), 16, scene_io_status_color);
+            y += 28.0f;
 
             GuiCheckBox(Rectangle{x, y, 20, 20}, "Show Physics Debug", &show_physics_debug);
-            y += 26;
+            y += 26.0f;
             GuiCheckBox(Rectangle{x, y, 20, 20}, "Show Help Overlay", &show_help);
-            y += 30;
+            y += 28.0f;
 
-            GuiLabel(Rectangle{x, y, 350, 22}, TextFormat("Object Count: %i", static_cast<int>(scene.Objects().size())));
-            y += 22;
-            GuiLabel(Rectangle{x, y, 350, 22}, TextFormat("Hovered ID: %i", hovered_object_id));
-            y += 22;
-            GuiLabel(Rectangle{x, y, 350, 22}, TextFormat("Selected ID: %i", selected_object_id));
-            y += 22;
-            GuiLabel(Rectangle{x, y, 350, 22}, TextFormat("Dragging: %s", scene.IsDragging() ? "Yes" : "No"));
+            GuiLabel(Rectangle{x, y, 360, 22}, TextFormat("Object Count: %i", static_cast<int>(scene.Objects().size())));
+            y += 22.0f;
+            GuiLabel(Rectangle{x, y, 360, 22}, TextFormat("Constraint Count: %i", static_cast<int>(scene.Constraints().size())));
+            y += 22.0f;
+            GuiLabel(Rectangle{x, y, 360, 22}, TextFormat("Hovered ID: %i", hovered_object_id));
+            y += 22.0f;
+            GuiLabel(Rectangle{x, y, 360, 22}, TextFormat("Selected ID: %i", selected_object_id));
+            y += 22.0f;
+            GuiLabel(Rectangle{x, y, 360, 22}, TextFormat("Dragging: %s", scene.IsDragging() ? "Yes" : "No"));
+            y += 22.0f;
+            GuiLabel(Rectangle{x, y, 360, 22}, TextFormat("Window: %d x %d", GetScreenWidth(), GetScreenHeight()));
         }
 
         if (show_help)
         {
-            DrawRectangle(420, 16, 520, 106, Fade(RAYWHITE, 0.92f));
-            DrawRectangleLines(420, 16, 520, 106, Fade(DARKGRAY, 0.60f));
+            const int margin = 16;
+            const int help_w = std::min(760, std::max(460, GetScreenWidth() - 460));
+            const int help_h = 128;
+            const int help_x = GetScreenWidth() - help_w - margin;
+            const int help_y = margin;
 
-            DrawText("Controls", 434, 28, 22, BLACK);
-            DrawText("WASD + Mouse: move camera (free mode)", 434, 56, 19, DARKGRAY);
-            DrawText("Left drag: move dynamic body | Right click: delete hovered",
-                     434,
-                     80,
-                     19,
-                     DARKGRAY);
-            DrawText("1/2/3/4: spawn Box/Sphere/Capsule/Cylinder | F1 UI | F2 Physics Debug | F3 Help",
-                     434,
-                     102,
-                     17,
-                     DARKGRAY);
+            DrawRectangle(help_x, help_y, help_w, help_h, Fade(RAYWHITE, 0.92f));
+            DrawRectangleLines(help_x, help_y, help_w, help_h, Fade(DARKGRAY, 0.60f));
+
+            DrawText("Controls", help_x + 14, help_y + 12, 22, BLACK);
+            DrawText("WASD + mouse: move camera (free mode)", help_x + 14, help_y + 40, 18, DARKGRAY);
+            DrawText("Left drag: move dynamic body | Right click: delete hovered", help_x + 14, help_y + 62, 18, DARKGRAY);
+            DrawText("1/2/3/4 spawn | F1 UI | F2 debug | F3 help | F5 save | F9 load", help_x + 14, help_y + 84, 18, DARKGRAY);
+            DrawText("Units: meter, kilogram, second, Newton, N·m, radian", help_x + 14, help_y + 106, 17, DARKGRAY);
         }
 
         EndDrawing();
