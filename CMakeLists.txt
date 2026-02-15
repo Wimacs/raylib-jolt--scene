@@ -18,15 +18,30 @@ set(CROSS_PLATFORM_DETERMINISTIC OFF CACHE BOOL "" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
 set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
 set(OBJECT_LAYER_BITS 16 CACHE STRING "" FORCE)
-set(USE_SSE4_1 ON CACHE BOOL "" FORCE)
-set(USE_SSE4_2 ON CACHE BOOL "" FORCE)
-set(USE_AVX ON CACHE BOOL "" FORCE)
-set(USE_AVX2 ON CACHE BOOL "" FORCE)
-set(USE_AVX512 OFF CACHE BOOL "" FORCE)
-set(USE_LZCNT ON CACHE BOOL "" FORCE)
-set(USE_TZCNT ON CACHE BOOL "" FORCE)
-set(USE_F16C ON CACHE BOOL "" FORCE)
-set(USE_FMADD ON CACHE BOOL "" FORCE)
+if(EMSCRIPTEN)
+  set(PLATFORM
+      Web
+      CACHE STRING "" FORCE)
+  set(USE_SSE4_1 OFF CACHE BOOL "" FORCE)
+  set(USE_SSE4_2 OFF CACHE BOOL "" FORCE)
+  set(USE_AVX OFF CACHE BOOL "" FORCE)
+  set(USE_AVX2 OFF CACHE BOOL "" FORCE)
+  set(USE_AVX512 OFF CACHE BOOL "" FORCE)
+  set(USE_LZCNT OFF CACHE BOOL "" FORCE)
+  set(USE_TZCNT OFF CACHE BOOL "" FORCE)
+  set(USE_F16C OFF CACHE BOOL "" FORCE)
+  set(USE_FMADD OFF CACHE BOOL "" FORCE)
+else()
+  set(USE_SSE4_1 ON CACHE BOOL "" FORCE)
+  set(USE_SSE4_2 ON CACHE BOOL "" FORCE)
+  set(USE_AVX ON CACHE BOOL "" FORCE)
+  set(USE_AVX2 ON CACHE BOOL "" FORCE)
+  set(USE_AVX512 OFF CACHE BOOL "" FORCE)
+  set(USE_LZCNT ON CACHE BOOL "" FORCE)
+  set(USE_TZCNT ON CACHE BOOL "" FORCE)
+  set(USE_F16C ON CACHE BOOL "" FORCE)
+  set(USE_FMADD ON CACHE BOOL "" FORCE)
+endif()
 
 FetchContent_Declare(
   raylib
@@ -50,6 +65,24 @@ if(NOT raygui_POPULATED)
   FetchContent_Populate(raygui)
 endif()
 
+find_package(nlohmann_json CONFIG QUIET)
+
+if(NOT TARGET nlohmann_json::nlohmann_json)
+  find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp)
+  if(NLOHMANN_JSON_INCLUDE_DIR)
+    add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)
+    set_target_properties(
+      nlohmann_json::nlohmann_json
+      PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${NLOHMANN_JSON_INCLUDE_DIR}")
+  else()
+    FetchContent_Declare(
+      nlohmann_json
+      GIT_REPOSITORY https://github.com/nlohmann/json.git
+      GIT_TAG v3.11.3)
+    FetchContent_MakeAvailable(nlohmann_json)
+  endif()
+endif()
+
 add_executable(
   raylib_jolt_scene
   src/main.cpp
@@ -59,7 +92,14 @@ add_executable(
 
 target_include_directories(raylib_jolt_scene PRIVATE ${JoltPhysics_SOURCE_DIR}/..)
 target_include_directories(raylib_jolt_scene PRIVATE ${raygui_SOURCE_DIR}/src)
-target_link_libraries(raylib_jolt_scene PRIVATE Jolt raylib)
+target_link_libraries(raylib_jolt_scene PRIVATE Jolt raylib nlohmann_json::nlohmann_json)
+if(EMSCRIPTEN)
+  target_link_options(
+    raylib_jolt_scene PRIVATE "-sUSE_GLFW=3" "-sGL_ENABLE_GET_PROC_ADDRESS"
+                              "-sASYNCIFY"
+                              "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/scene_default_showcase.json@scene_default_showcase.json"
+                              "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/scene_constraints_motor_example.json@scene_constraints_motor_example.json")
+endif()
 
 if(MSVC)
   target_compile_options(raylib_jolt_scene PRIVATE /W4)
