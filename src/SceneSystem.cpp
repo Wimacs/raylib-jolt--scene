@@ -264,20 +264,179 @@ void SceneSystem::InitializeDefaultScene()
     next_id_ = 1;
     drag_state_.reset();
 
+    // Built-in fallback now mirrors an FPS-friendly blockout arena.
     AddBox(Vector3{0.0f, -1.0f, 0.0f},
-           Vector3{20.0f, 1.0f, 20.0f},
+           Vector3{40.0f, 1.0f, 40.0f},
            false,
-           Color{120, 120, 120, 255},
+           Color{110, 115, 120, 255},
+           ScenePhysics{});
+
+    AddBox(Vector3{0.0f, 2.0f, -20.0f},
+           Vector3{20.0f, 3.0f, 1.0f},
+           false,
+           Color{90, 95, 105, 255},
+           ScenePhysics{});
+    AddBox(Vector3{0.0f, 2.0f, 20.0f},
+           Vector3{20.0f, 3.0f, 1.0f},
+           false,
+           Color{90, 95, 105, 255},
+           ScenePhysics{});
+    AddBox(Vector3{-20.0f, 2.0f, 0.0f},
+           Vector3{1.0f, 3.0f, 20.0f},
+           false,
+           Color{90, 95, 105, 255},
+           ScenePhysics{});
+    AddBox(Vector3{20.0f, 2.0f, 0.0f},
+           Vector3{1.0f, 3.0f, 20.0f},
+           false,
+           Color{90, 95, 105, 255},
+           ScenePhysics{});
+
+    AddBox(Vector3{0.0f, 1.2f, -6.0f},
+           Vector3{6.0f, 1.2f, 0.6f},
+           false,
+           Color{120, 120, 130, 255},
+           ScenePhysics{});
+    AddBox(Vector3{0.0f, 1.2f, 6.0f},
+           Vector3{6.0f, 1.2f, 0.6f},
+           false,
+           Color{120, 120, 130, 255},
+           ScenePhysics{});
+
+    AddBox(Vector3{-7.0f, 1.5f, 0.0f},
+           Vector3{2.5f, 1.5f, 2.5f},
+           false,
+           Color{100, 105, 115, 255},
+           ScenePhysics{});
+    AddBox(Vector3{7.0f, 1.5f, 0.0f},
+           Vector3{2.5f, 1.5f, 2.5f},
+           false,
+           Color{100, 105, 115, 255},
            ScenePhysics{});
 
     AddBox(Vector3{0.0f, 2.5f, 0.0f},
-           Vector3{0.6f, 0.6f, 0.6f},
+           Vector3{1.0f, 2.5f, 1.0f},
+           false,
+           Color{115, 120, 130, 255},
+           ScenePhysics{});
+
+    AddBox(Vector3{-12.0f, 0.5f, -8.0f},
+           Vector3{2.0f, 0.5f, 2.0f},
+           false,
+           Color{135, 140, 150, 255},
+           ScenePhysics{});
+    AddBox(Vector3{-12.0f, 1.0f, -11.0f},
+           Vector3{2.0f, 0.5f, 2.0f},
+           false,
+           Color{135, 140, 150, 255},
+           ScenePhysics{});
+    AddBox(Vector3{-12.0f, 1.5f, -14.0f},
+           Vector3{4.0f, 0.5f, 4.0f},
+           false,
+           Color{135, 140, 150, 255},
+           ScenePhysics{});
+
+    AddBox(Vector3{12.0f, 1.5f, 14.0f},
+           Vector3{4.0f, 0.5f, 4.0f},
+           false,
+           Color{135, 140, 150, 255},
+           ScenePhysics{});
+    AddBox(Vector3{0.0f, 2.5f, 14.0f},
+           Vector3{8.0f, 0.4f, 1.5f},
+           false,
+           Color{140, 145, 155, 255},
+           ScenePhysics{});
+
+    AddBox(Vector3{2.0f, 4.0f, 2.0f},
+           Vector3{0.55f, 0.55f, 0.55f},
            true,
-           Color{80, 180, 255, 255},
+           Color{205, 150, 90, 255},
            DefaultDynamicPhysics());
-    AddSphere(Vector3{2.5f, 3.0f, 0.0f}, 0.5f, true, Color{255, 150, 70, 255}, DefaultDynamicPhysics());
-    AddCapsule(Vector3{-1.8f, 3.4f, 0.8f}, 0.5f, 0.28f, Color{130, 230, 170, 255}, DefaultDynamicPhysics());
-    AddCylinder(Vector3{1.4f, 4.0f, -1.0f}, 0.55f, 0.30f, Color{200, 170, 255, 255}, DefaultDynamicPhysics());
+    AddBox(Vector3{-3.0f, 5.0f, -2.0f},
+           Vector3{0.55f, 0.55f, 0.55f},
+           true,
+           Color{205, 150, 90, 255},
+           DefaultDynamicPhysics());
+    AddSphere(Vector3{4.0f, 6.0f, -4.0f},
+              0.45f,
+              true,
+              Color{90, 180, 235, 255},
+              DefaultDynamicPhysics());
+    AddSphere(Vector3{-5.0f, 4.0f, 5.0f},
+              0.45f,
+              true,
+              Color{90, 180, 235, 255},
+              DefaultDynamicPhysics());
+    AddCylinder(Vector3{0.0f, 5.0f, 0.0f},
+                0.50f,
+                0.35f,
+                Color{160, 215, 150, 255},
+                DefaultDynamicPhysics());
+    AddCapsule(Vector3{6.0f, 5.0f, 3.0f},
+               0.55f,
+               0.30f,
+               Color{185, 155, 230, 255},
+               DefaultDynamicPhysics());
+
+    auto add_static_ramp =
+        [this](const Vector3 &position,
+               const Vector3 &half_extents,
+               float angle_radians,
+               Color color)
+    {
+        const int object_id = AddBox(position,
+                                     half_extents,
+                                     false,
+                                     color,
+                                     ScenePhysics{});
+        const auto index = FindObjectIndexById(object_id);
+        if (!index.has_value())
+        {
+            return;
+        }
+
+        const Quaternion rotation =
+            QuaternionFromAxisAngle(Vector3{1.0f, 0.0f, 0.0f}, angle_radians);
+        physics_world_.SetBodyTransform(objects_[*index].body_id,
+                                        position,
+                                        rotation,
+                                        false);
+    };
+
+    add_static_ramp(Vector3{-13.0f, 1.05f, -2.0f},
+                    Vector3{2.0f, 0.20f, 4.0f},
+                    -0.174533f,
+                    Color{170, 140, 110, 255});
+    add_static_ramp(Vector3{-8.0f, 1.05f, -2.0f},
+                    Vector3{2.0f, 0.20f, 4.0f},
+                    -0.349066f,
+                    Color{180, 132, 98, 255});
+    add_static_ramp(Vector3{-3.0f, 1.05f, -2.0f},
+                    Vector3{2.0f, 0.20f, 4.0f},
+                    -0.523599f,
+                    Color{188, 123, 87, 255});
+    add_static_ramp(Vector3{2.0f, 1.05f, -2.0f},
+                    Vector3{2.0f, 0.20f, 4.0f},
+                    -0.610865f,
+                    Color{196, 114, 79, 255});
+    add_static_ramp(Vector3{7.0f, 1.05f, -2.0f},
+                    Vector3{2.0f, 0.20f, 4.0f},
+                    -0.785398f,
+                    Color{204, 104, 70, 255});
+
+    for (int i = 0; i < 8; ++i)
+    {
+        AddBox(Vector3{12.0f, 0.08f + static_cast<float>(i) * 0.16f, -12.0f + static_cast<float>(i) * 0.55f},
+               Vector3{1.4f, 0.08f, 0.28f},
+               false,
+               Color{132, 136, 142, 255},
+               ScenePhysics{});
+    }
+    AddBox(Vector3{12.0f, 1.40f, -7.40f},
+           Vector3{2.2f, 0.16f, 1.20f},
+           false,
+           Color{144, 148, 154, 255},
+           ScenePhysics{});
 }
 
 void SceneSystem::Step(float delta_time)

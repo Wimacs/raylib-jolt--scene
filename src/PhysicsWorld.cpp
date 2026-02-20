@@ -9,6 +9,7 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/MotionProperties.h>
 #include <Jolt/Physics/Body/MotionType.h>
 #include <Jolt/Physics/Collision/CastResult.h>
@@ -112,7 +113,7 @@ bool PhysicsWorld::Initialize()
 
     JPH::RegisterDefaultAllocator();
     JPH::Trace = TraceImpl;
-    JPH_IF_ENABLE_ASSERTS(AssertFailed = AssertFailedImpl;)
+    JPH_IF_ENABLE_ASSERTS(JPH::AssertFailed = AssertFailedImpl;)
 
     JPH::Factory::sInstance = new JPH::Factory();
     JPH::RegisterTypes();
@@ -432,6 +433,18 @@ Quaternion PhysicsWorld::GetBodyRotation(JPH::BodyID body_id) const
     return ToRaylibQuaternion(body_interface.GetRotation(body_id));
 }
 
+Vector3 PhysicsWorld::GetBodyLinearVelocity(JPH::BodyID body_id) const
+{
+    if (!initialized_ || body_id.IsInvalid() || !IsBodyAdded(body_id))
+    {
+        return Vector3Zero();
+    }
+
+    const JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
+    const JPH::Vec3 velocity = body_interface.GetLinearVelocity(body_id);
+    return Vector3{velocity.GetX(), velocity.GetY(), velocity.GetZ()};
+}
+
 void PhysicsWorld::SetBodyTransform(JPH::BodyID body_id,
                                     const Vector3 &position,
                                     const Quaternion &rotation,
@@ -448,6 +461,40 @@ void PhysicsWorld::SetBodyTransform(JPH::BodyID body_id,
         ToRVec3(position),
         ToJoltQuat(rotation),
         activate ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+}
+
+void PhysicsWorld::SetBodyLinearVelocity(JPH::BodyID body_id,
+                                         const Vector3 &linear_velocity,
+                                         bool activate)
+{
+    if (!initialized_ || body_id.IsInvalid() || !IsBodyAdded(body_id))
+    {
+        return;
+    }
+
+    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
+    body_interface.SetLinearVelocity(body_id, ToVec3(linear_velocity));
+    if (activate)
+    {
+        body_interface.ActivateBody(body_id);
+    }
+}
+
+void PhysicsWorld::SetBodyAngularVelocity(JPH::BodyID body_id,
+                                          const Vector3 &angular_velocity,
+                                          bool activate)
+{
+    if (!initialized_ || body_id.IsInvalid() || !IsBodyAdded(body_id))
+    {
+        return;
+    }
+
+    JPH::BodyInterface &body_interface = physics_system_->GetBodyInterface();
+    body_interface.SetAngularVelocity(body_id, ToVec3(angular_velocity));
+    if (activate)
+    {
+        body_interface.ActivateBody(body_id);
+    }
 }
 
 void PhysicsWorld::SetBodyVelocityZero(JPH::BodyID body_id)
@@ -510,7 +557,8 @@ bool PhysicsWorld::RayCast(const Vector3 &origin,
                            const Vector3 &direction,
                            float max_distance,
                            JPH::BodyID &out_body_id,
-                           Vector3 &out_hit_point) const
+                           Vector3 &out_hit_point,
+                           JPH::BodyID ignore_body_id) const
 {
     out_body_id = JPH::BodyID();
     out_hit_point = Vector3Zero();
@@ -526,7 +574,16 @@ bool PhysicsWorld::RayCast(const Vector3 &origin,
 
     const JPH::RRayCast ray(ToRVec3(origin), ToVec3(scaled_direction));
     JPH::RayCastResult hit;
-    const bool has_hit = physics_system_->GetNarrowPhaseQuery().CastRay(ray, hit);
+    bool has_hit = false;
+    if (ignore_body_id.IsInvalid())
+    {
+        has_hit = physics_system_->GetNarrowPhaseQuery().CastRay(ray, hit);
+    }
+    else
+    {
+        const JPH::IgnoreSingleBodyFilter body_filter(ignore_body_id);
+        has_hit = physics_system_->GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, body_filter);
+    }
     if (!has_hit)
     {
         return false;
@@ -862,6 +919,17 @@ void PhysicsWorld::ApplyBodyPhysicsParams(JPH::BodyCreationSettings &settings,
     settings.mEnhancedInternalEdgeRemoval = params.enhanced_internal_edge_removal;
     settings.mCollideKinematicVsNonDynamic = params.collide_kinematic_vs_non_dynamic;
     settings.mAllowDynamicOrKinematic = params.allow_dynamic_or_kinematic;
+    if (params.lock_rotation)
+    {
+        settings.mAllowedDOFs =
+            JPH::EAllowedDOFs::TranslationX |
+            JPH::EAllowedDOFs::TranslationY |
+            JPH::EAllowedDOFs::TranslationZ;
+    }
+    else
+    {
+        settings.mAllowedDOFs = JPH::EAllowedDOFs::All;
+    }
     settings.mMotionQuality = params.use_linear_cast
                                   ? JPH::EMotionQuality::LinearCast
                                   : JPH::EMotionQuality::Discrete;

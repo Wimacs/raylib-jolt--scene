@@ -5,19 +5,18 @@ Interactive scene system based on [raylib](https://github.com/raysan5/raylib) + 
 ## Implemented Features
 
 - Full rigid-body simulation for scene objects (ground + dynamic bodies)
-- Runtime object creation (GUI + hotkeys):
-  - Box
-  - Sphere
-  - Capsule
-  - Cylinder
-- Object deletion:
-  - Right click: delete hovered object
-  - `Delete` / `Backspace`: delete selected object
-- Dragging dynamic objects with mouse
+- FPS-only capsule controller (Jolt dynamic capsule body):
+  - Mouse look
+  - `W/A/S/D` movement
+  - Sprint + jump
+  - Spawn point switch + respawn
+- FPS sandbox test map (`scene_fps_sandbox.json`) with:
+  - Multiple slope angles
+  - Staircase climb test segment
+  - Arena blockout and physics props
 - Physics debug view (collision wireframes)
-- English GUI panel via `raygui`
 - Resizable window support (`FLAG_WINDOW_RESIZABLE`)
-- Scene JSON save/load
+- Scene JSON auto-load at startup
 - Scene JSON constraints + motor support:
   - Constraint types: `fixed`, `point`, `distance`, `hinge`, `slider`
   - Motor modes: `off`, `velocity`, `position`
@@ -33,17 +32,14 @@ Interactive scene system based on [raylib](https://github.com/raysan5/raylib) + 
 
 ## Controls
 
-- Camera: `W/A/S/D` + mouse (raylib free camera)
-- Spawn quick keys: `1/2/3/4` for Box/Sphere/Capsule/Cylinder
-- Drag: hold left mouse on dynamic object
-- Delete:
-  - Right mouse on hovered object
-  - `Delete` / `Backspace` on selected object
-- Toggle UI: `F1`
+- Move: `W/A/S/D`
+- Sprint: `Left Shift` / `Right Shift`
+- Jump: `Space`
+- Look: mouse
+- Cycle spawn point: `F6`
+- Respawn at selected spawn: `R`
 - Toggle physics debug: `F2`
 - Toggle help overlay: `F3`
-- Save scene JSON: `F5`
-- Load scene JSON: `F9`
 
 ## Build (Desktop)
 
@@ -69,6 +65,7 @@ cmake --build build-wasm -j
 
 The WebAssembly build preloads:
 
+- `scene_fps_sandbox.json`
 - `scene_default_showcase.json`
 - `scene_constraints_motor_example.json`
 
@@ -84,12 +81,7 @@ Open <http://localhost:8080>.
 
 ## Scene JSON
 
-Use the GUI field **Scene JSON Path** and click:
-
-- `Save Scene JSON`
-- `Load Scene JSON`
-
-Default path in GUI is `scene_default_showcase.json` (auto-loaded on app startup).
+Default startup scene is `scene_fps_sandbox.json` (auto-loaded on app startup).
 
 Showcase coverage:
 
@@ -98,7 +90,8 @@ Showcase coverage:
 
 Sample files:
 
-- `scene_default_showcase.json` (full showcase, default)
+- `scene_fps_sandbox.json` (FPS sandbox map, default)
+- `scene_default_showcase.json` (full constraints + motor showcase)
 - `scene_constraints_motor_example.json` (smaller example)
 
 ### Units
@@ -196,6 +189,9 @@ Scene files use SI-like units:
 - `CMakeLists.txt`: dependencies and build setup (`raylib`, `Jolt`, `raygui`, `nlohmann/json`)
 - `src/PhysicsWorld.h`, `src/PhysicsWorld.cpp`: Jolt wrapper, body creation, constraints/motors, world stepping
 - `src/SceneSystem.h`, `src/SceneSystem.cpp`: scene management, picking/dragging, rendering, JSON serialization
-- `src/main.cpp`: app loop, input, English GUI panel, resize-aware layout, JSON controls
-- `scene_default_showcase.json`: default full showcase scene (all constraints + motor modes)
+- `src/game/fps/FpsPlayerController.*`: FPS capsule controller
+- `src/game/fps/FpsSandboxRuntime.*`: FPS runtime loop, spawning, debug/help overlays
+- `src/main.cpp`: minimal entrypoint, delegates to app runtime
+- `scene_fps_sandbox.json`: default FPS sandbox scene
+- `scene_default_showcase.json`: full constraints + motor showcase scene
 - `scene_constraints_motor_example.json`: smaller constraints/motor example

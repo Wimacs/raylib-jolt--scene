@@ -118,6 +118,7 @@ struct BodyPhysicsParams
     bool enhanced_internal_edge_removal{false};
     bool collide_kinematic_vs_non_dynamic{false};
     bool allow_dynamic_or_kinematic{false};
+    bool lock_rotation{false};
     bool use_custom_mass{false};
     float mass{1.0f};
     bool use_linear_cast{false};
@@ -276,11 +277,18 @@ public:
 
     [[nodiscard]] Vector3 GetBodyPosition(JPH::BodyID body_id) const;
     [[nodiscard]] Quaternion GetBodyRotation(JPH::BodyID body_id) const;
+    [[nodiscard]] Vector3 GetBodyLinearVelocity(JPH::BodyID body_id) const;
 
     void SetBodyTransform(JPH::BodyID body_id,
                           const Vector3 &position,
                           const Quaternion &rotation,
                           bool activate);
+    void SetBodyLinearVelocity(JPH::BodyID body_id,
+                               const Vector3 &linear_velocity,
+                               bool activate = true);
+    void SetBodyAngularVelocity(JPH::BodyID body_id,
+                                const Vector3 &angular_velocity,
+                                bool activate = true);
     void SetBodyVelocityZero(JPH::BodyID body_id);
     bool SetBodyPhysicsParams(JPH::BodyID body_id,
                               const BodyPhysicsParams &params,
@@ -290,7 +298,8 @@ public:
                                const Vector3 &direction,
                                float max_distance,
                                JPH::BodyID &out_body_id,
-                               Vector3 &out_hit_point) const;
+                               Vector3 &out_hit_point,
+                               JPH::BodyID ignore_body_id = JPH::BodyID()) const;
 
     [[nodiscard]] bool IsBodyAdded(JPH::BodyID body_id) const;
 

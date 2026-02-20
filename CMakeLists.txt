@@ -86,10 +86,14 @@ endif()
 add_executable(
   raylib_jolt_scene
   src/main.cpp
+  src/app/GameApp.cpp
+  src/engine/core/FixedStepClock.cpp
+  src/game/fps/FpsPlayerController.cpp
+  src/game/fps/FpsSandboxRuntime.cpp
   src/PhysicsWorld.cpp
-  src/SceneSystem.cpp
-  src/RayGuiImpl.cpp)
+  src/SceneSystem.cpp)
 
+target_include_directories(raylib_jolt_scene PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(raylib_jolt_scene PRIVATE ${JoltPhysics_SOURCE_DIR}/..)
 target_include_directories(raylib_jolt_scene PRIVATE ${raygui_SOURCE_DIR}/src)
 target_link_libraries(raylib_jolt_scene PRIVATE Jolt raylib nlohmann_json::nlohmann_json)
@@ -97,6 +101,7 @@ if(EMSCRIPTEN)
   target_link_options(
     raylib_jolt_scene PRIVATE "-sUSE_GLFW=3" "-sGL_ENABLE_GET_PROC_ADDRESS"
                               "-sASYNCIFY"
+                              "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/scene_fps_sandbox.json@scene_fps_sandbox.json"
                               "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/scene_default_showcase.json@scene_default_showcase.json"
                               "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/scene_constraints_motor_example.json@scene_constraints_motor_example.json")
 endif()
