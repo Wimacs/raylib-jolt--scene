@@ -824,11 +824,17 @@ int SceneSystem::DraggingObjectId() const
     return drag_state_->object_id;
 }
 
-void SceneSystem::DrawPhysicsDebug(bool show_sleeping) const
+void SceneSystem::DrawPhysicsDebug(bool show_sleeping,
+                                   JPH::BodyID ignore_body_id) const
 {
     const auto debug_bodies = physics_world_.DebugBodies();
     for (const PhysicsDebugBody &debug_body : debug_bodies)
     {
+        if (!ignore_body_id.IsInvalid() && debug_body.body_id == ignore_body_id)
+        {
+            continue;
+        }
+
         const Vector3 position = physics_world_.GetBodyPosition(debug_body.body_id);
         const Quaternion rotation = physics_world_.GetBodyRotation(debug_body.body_id);
         const Color wire = debug_body.dynamic ? GREEN : DARKGREEN;

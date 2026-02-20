@@ -167,7 +167,8 @@ public:
     [[nodiscard]] bool IsDragging() const;
     [[nodiscard]] int DraggingObjectId() const;
 
-    void DrawPhysicsDebug(bool show_sleeping = true) const;
+    void DrawPhysicsDebug(bool show_sleeping = true,
+                          JPH::BodyID ignore_body_id = JPH::BodyID()) const;
 
     bool SaveToJson(const std::string &path) const;
     bool LoadFromJson(const std::string &path, std::string &out_error);
