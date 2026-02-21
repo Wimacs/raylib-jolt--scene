@@ -3,6 +3,7 @@
 #include <raymath.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace game::fps
 {
@@ -19,6 +20,7 @@ void FpsSandboxRuntime::Initialize()
 {
     SetupDefaultCamera();
     EnterPlayerMode();
+    SpawnTrainingBots();
 }
 
 void FpsSandboxRuntime::Update(float frame_delta_seconds)
@@ -28,12 +30,16 @@ void FpsSandboxRuntime::Update(float frame_delta_seconds)
     player_controller_.GatherInput();
     UpdateWeaponState(frame_delta_seconds);
     UpdateImpactDecals(frame_delta_seconds);
+    hit_marker_remaining_seconds_ = std::max(
+        0.0f,
+        hit_marker_remaining_seconds_ - frame_delta_seconds);
 
     const int substeps = fixed_step_clock_.ConsumeSteps(frame_delta_seconds);
     for (int i = 0; i < substeps; ++i)
     {
         player_controller_.FixedUpdate(fixed_step_clock_.FixedDeltaSeconds());
         scene_.Step(fixed_step_clock_.FixedDeltaSeconds());
+        UpdateTrainingBots(fixed_step_clock_.FixedDeltaSeconds());
         UpdateBullets(fixed_step_clock_.FixedDeltaSeconds());
     }
 
@@ -75,6 +81,7 @@ void FpsSandboxRuntime::DrawOverlay() const
 
     DrawLine(cx - cross_radius, cy, cx + cross_radius, cy, cross_color);
     DrawLine(cx, cy - cross_radius, cx, cy + cross_radius, cross_color);
+    DrawHitMarker();
 
     DrawWeaponHud();
 
@@ -137,6 +144,11 @@ void FpsSandboxRuntime::DrawOverlay() const
              panel_y + 190,
              18,
              DARKGRAY);
+    DrawText(TextFormat("Robot Hits: %d  Headshots: %d", robot_hit_count_, robot_headshot_count_),
+             panel_x + 300,
+             panel_y + 190,
+             18,
+             DARKGRAY);
 }
 
 void FpsSandboxRuntime::DrawWeaponHud() const
@@ -193,6 +205,234 @@ void FpsSandboxRuntime::SetupDefaultCamera()
     camera_.up = Vector3{0.0f, 1.0f, 0.0f};
     camera_.fovy = 75.0f;
     camera_.projection = CAMERA_PERSPECTIVE;
+}
+
+void FpsSandboxRuntime::SpawnTrainingBots()
+{
+    training_robots_.clear();
+    training_bot_time_ = 0.0f;
+
+    ScenePhysics body_physics{};
+    body_physics.friction = 0.38f;
+    body_physics.restitution = 0.02f;
+    body_physics.linear_damping = 3.8f;
+    body_physics.angular_damping = 7.0f;
+    body_physics.gravity_factor = 0.0f;
+    body_physics.max_linear_velocity = 45.0f;
+    body_physics.max_angular_velocity = 10.0f;
+    body_physics.allow_sleeping = false;
+    body_physics.use_custom_mass = true;
+    body_physics.mass = 95.0f;
+
+    ScenePhysics head_physics = body_physics;
+    head_physics.is_sensor = true;
+    head_physics.mass = 30.0f;
+
+    struct PatrolSeed
+    {
+        Vector3 origin;
+        float radius;
+        float speed;
+        float phase;
+    };
+
+    const std::array<PatrolSeed, 4> seeds{
+        PatrolSeed{Vector3{-11.0f, 1.12f, 2.5f}, 2.7f, 0.92f, 0.0f},
+        PatrolSeed{Vector3{10.6f, 1.15f, -3.5f}, 2.3f, 1.10f, 1.7f},
+        PatrolSeed{Vector3{3.6f, 1.08f, 11.0f}, 2.1f, 0.86f, 3.4f},
+        PatrolSeed{Vector3{-1.8f, 1.10f, -11.8f}, 2.5f, 1.02f, 5.2f}};
+
+    const float body_half_height = 0.42f;
+    const float body_radius = 0.26f;
+    const float head_radius = 0.21f;
+    const float head_offset = body_half_height + body_radius + head_radius + 0.08f;
+
+    for (const PatrolSeed &seed : seeds)
+    {
+        const int body_object_id = scene_.AddCapsule(
+            seed.origin,
+            body_half_height,
+            body_radius,
+            Color{118, 158, 210, 255},
+            body_physics);
+        const int head_object_id = scene_.AddSphere(
+            Vector3Add(seed.origin, Vector3{0.0f, head_offset, 0.0f}),
+            head_radius,
+            true,
+            Color{226, 234, 248, 255},
+            head_physics);
+        if (body_object_id == 0 || head_object_id == 0)
+        {
+            continue;
+        }
+
+        TrainingRobot robot{};
+        robot.body_object_id = body_object_id;
+        robot.head_object_id = head_object_id;
+        robot.body_id = BodyIdForSceneObject(body_object_id);
+        robot.head_id = BodyIdForSceneObject(head_object_id);
+        robot.patrol_origin = seed.origin;
+        robot.patrol_radius = seed.radius;
+        robot.patrol_speed = seed.speed;
+        robot.phase = seed.phase;
+        robot.bob_amplitude = 0.12f;
+        robot.bob_speed = 2.1f;
+        if (robot.body_id.IsInvalid() || robot.head_id.IsInvalid())
+        {
+            continue;
+        }
+
+        training_robots_.push_back(robot);
+    }
+}
+
+void FpsSandboxRuntime::UpdateTrainingBots(float fixed_delta_seconds)
+{
+    if (training_robots_.empty())
+    {
+        return;
+    }
+
+    training_bot_time_ += fixed_delta_seconds;
+    const Quaternion upright = QuaternionIdentity();
+    const float head_offset = 0.97f;
+
+    for (TrainingRobot &robot : training_robots_)
+    {
+        if (!physics_world_.IsBodyAdded(robot.body_id) ||
+            !physics_world_.IsBodyAdded(robot.head_id))
+        {
+            continue;
+        }
+
+        const float orbit = training_bot_time_ * robot.patrol_speed + robot.phase;
+        const float sin_orbit = std::sinf(orbit);
+        const float cos_orbit = std::cosf(orbit);
+        const float bob = std::sinf(training_bot_time_ * robot.bob_speed + robot.phase * 1.6f) *
+            robot.bob_amplitude;
+
+        const Vector3 body_target{
+            robot.patrol_origin.x + cos_orbit * robot.patrol_radius,
+            robot.patrol_origin.y + bob,
+            robot.patrol_origin.z + sin_orbit * robot.patrol_radius};
+
+        Vector3 tangent{-sin_orbit, 0.0f, cos_orbit};
+        if (Vector3LengthSqr(tangent) > 0.0001f)
+        {
+            tangent = Vector3Normalize(tangent);
+        }
+        const Vector3 patrol_velocity = Vector3Scale(
+            tangent,
+            robot.patrol_radius * robot.patrol_speed);
+
+        physics_world_.SetBodyTransform(robot.body_id, body_target, upright, true);
+        physics_world_.SetBodyLinearVelocity(robot.body_id, patrol_velocity, true);
+        physics_world_.SetBodyAngularVelocity(robot.body_id, Vector3Zero(), false);
+
+        const float head_bob = std::sinf(training_bot_time_ * 3.4f + robot.phase) * 0.028f;
+        const Vector3 head_target = Vector3Add(
+            body_target,
+            Vector3{0.0f, head_offset + head_bob, 0.0f});
+        physics_world_.SetBodyTransform(robot.head_id, head_target, upright, true);
+        physics_world_.SetBodyLinearVelocity(robot.head_id, patrol_velocity, true);
+        physics_world_.SetBodyAngularVelocity(robot.head_id, Vector3Zero(), false);
+    }
+}
+
+void FpsSandboxRuntime::DrawHitMarker() const
+{
+    if (hit_marker_remaining_seconds_ <= 0.0f)
+    {
+        return;
+    }
+
+    const float life_ratio = std::clamp(
+        hit_marker_remaining_seconds_ / std::max(0.0001f, hit_marker_duration_seconds_),
+        0.0f,
+        1.0f);
+    const float progress = 1.0f - life_ratio;
+    const float inner = Lerp(19.0f, 10.0f, progress);
+    const float outer = inner + Lerp(11.0f, 7.0f, progress);
+    const float thickness = hit_marker_critical_ ? 3.4f : 2.4f;
+    const Color base_color = hit_marker_critical_
+        ? Color{232, 48, 52, 255}
+        : Color{250, 250, 250, 255};
+    const Color marker_color = Fade(base_color, 0.32f + 0.68f * life_ratio);
+
+    const Vector2 center{
+        static_cast<float>(GetScreenWidth()) * 0.5f,
+        static_cast<float>(GetScreenHeight()) * 0.5f};
+
+    DrawLineEx(Vector2{center.x - inner, center.y - inner},
+               Vector2{center.x - outer, center.y - outer},
+               thickness,
+               marker_color);
+    DrawLineEx(Vector2{center.x + inner, center.y + inner},
+               Vector2{center.x + outer, center.y + outer},
+               thickness,
+               marker_color);
+    DrawLineEx(Vector2{center.x + inner, center.y - inner},
+               Vector2{center.x + outer, center.y - outer},
+               thickness,
+               marker_color);
+    DrawLineEx(Vector2{center.x - inner, center.y + inner},
+               Vector2{center.x - outer, center.y + outer},
+               thickness,
+               marker_color);
+
+    if (hit_marker_critical_)
+    {
+        DrawCircleLines(static_cast<int>(center.x),
+                        static_cast<int>(center.y),
+                        4.0f + 2.0f * progress,
+                        Fade(marker_color, 0.85f));
+    }
+}
+
+void FpsSandboxRuntime::TriggerHitMarker(bool critical_hit)
+{
+    hit_marker_remaining_seconds_ = hit_marker_duration_seconds_;
+    hit_marker_critical_ = critical_hit;
+    ++robot_hit_count_;
+    if (critical_hit)
+    {
+        ++robot_headshot_count_;
+    }
+}
+
+bool FpsSandboxRuntime::ResolveRobotHit(JPH::BodyID body_id, bool &out_headshot) const
+{
+    out_headshot = false;
+    if (body_id.IsInvalid())
+    {
+        return false;
+    }
+
+    for (const TrainingRobot &robot : training_robots_)
+    {
+        if (body_id == robot.head_id)
+        {
+            out_headshot = true;
+            return true;
+        }
+        if (body_id == robot.body_id)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+JPH::BodyID FpsSandboxRuntime::BodyIdForSceneObject(int object_id) const
+{
+    for (const SceneObject &object : scene_.Objects())
+    {
+        if (object.id == object_id)
+        {
+            return object.body_id;
+        }
+    }
+    return JPH::BodyID();
 }
 
 void FpsSandboxRuntime::DrawGameplayMarkers() const
@@ -456,6 +696,7 @@ void FpsSandboxRuntime::RespawnPlayer()
     reloading_ = false;
     reload_remaining_seconds_ = 0.0f;
     fire_cooldown_seconds_ = 0.0f;
+    hit_marker_remaining_seconds_ = 0.0f;
     recoil_offset_ = Vector2{0.0f, 0.0f};
     spread_bloom_ = 0.0f;
 }
@@ -843,6 +1084,13 @@ void FpsSandboxRuntime::UpdateBullets(float fixed_delta_seconds)
                     0.75f,
                     1.45f);
                 SpawnImpactDecal(hit_point, hit_normal, impact_scale);
+
+                bool headshot = false;
+                if (ResolveRobotHit(hit_body, headshot))
+                {
+                    TriggerHitMarker(headshot);
+                }
+
                 it->current_position = hit_point;
                 should_remove = true;
             }

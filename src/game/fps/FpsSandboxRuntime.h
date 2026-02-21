@@ -4,6 +4,8 @@
 #include "engine/core/FixedStepClock.h"
 #include "game/fps/FpsPlayerController.h"
 
+#include <Jolt/Physics/Body/BodyID.h>
+
 #include <array>
 #include <raylib.h>
 #include <vector>
@@ -53,7 +55,27 @@ private:
         Color accent{WHITE};
     };
 
+    struct TrainingRobot
+    {
+        int body_object_id{0};
+        int head_object_id{0};
+        JPH::BodyID body_id{};
+        JPH::BodyID head_id{};
+        Vector3 patrol_origin{0.0f, 0.0f, 0.0f};
+        float patrol_radius{2.0f};
+        float patrol_speed{1.0f};
+        float phase{0.0f};
+        float bob_amplitude{0.12f};
+        float bob_speed{2.0f};
+    };
+
     void SetupDefaultCamera();
+    void SpawnTrainingBots();
+    void UpdateTrainingBots(float fixed_delta_seconds);
+    void DrawHitMarker() const;
+    void TriggerHitMarker(bool critical_hit);
+    [[nodiscard]] bool ResolveRobotHit(JPH::BodyID body_id, bool &out_headshot) const;
+    [[nodiscard]] JPH::BodyID BodyIdForSceneObject(int object_id) const;
     void DrawGameplayMarkers() const;
     void DrawBullets() const;
     void DrawImpactDecals() const;
@@ -93,11 +115,14 @@ private:
     bool trigger_held_{false};
     bool trigger_pressed_{false};
     bool reloading_{false};
+    bool hit_marker_critical_{false};
     float aim_blend_{0.0f};
     float fire_cooldown_seconds_{0.0f};
     float reload_remaining_seconds_{0.0f};
+    float hit_marker_remaining_seconds_{0.0f};
     Vector2 recoil_offset_{0.0f, 0.0f};
     float spread_bloom_{0.0f};
+    float training_bot_time_{0.0f};
 
     float hip_fov_{75.0f};
     float ads_fov_{42.0f};
@@ -112,7 +137,10 @@ private:
     float spread_bloom_decay_{0.031f};
     float spread_bloom_max_{0.032f};
     float decal_life_seconds_{8.5f};
+    float hit_marker_duration_seconds_{0.16f};
     int max_impact_decals_{180};
+    int robot_hit_count_{0};
+    int robot_headshot_count_{0};
 
     std::array<WeaponSlot, 2> weapon_slots_{
         WeaponSlot{
@@ -143,6 +171,7 @@ private:
 
     std::vector<BallisticBullet> bullets_;
     std::vector<ImpactDecal> impact_decals_;
+    std::vector<TrainingRobot> training_robots_;
 
     std::array<Vector3, 4> spawn_points_{
         Vector3{-14.0f, 1.10f, -14.0f},
